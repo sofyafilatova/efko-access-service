@@ -4,7 +4,7 @@ sqlalchemy==2.0.23
 alembic==1.13.0
 geoalchemy2==0.14.1
 psycopg2-binary==2.9.9
-pydantic==2.5.0
+pydantic==2.10.6
 python-dotenv==1.0.0
 aio-pika==9.6.2
 python-jose[cryptography]==3.3.0
