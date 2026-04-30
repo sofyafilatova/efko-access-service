@@ -1,0 +1,72 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from app.core.config import settings
+import logging
+from app.routes.zones import router as zones_router
+from app.routes.dev import router as dev_router
+from app.routes.employees import router as employees_router
+from app.routes.shifts import router as shifts_router
+from app.routes.attendance import router as attendance_router
+from app.routes.bookings import router as bookings_router
+from app.routes.guest_passes import router as guest_passes_router
+from app.routes.notifications import router as notifications_router
+import asyncio
+from app.core.rabbitmq import close as rabbitmq_close
+from app.services.personnel_consumer import start_personnel_consumer
+from app.core.config import settings
+from app.routes.requests import router as requests_router
+print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🚀 access-service starting...")
+    # Запускаем consumer в фоне — не блокирует старт сервера
+    asyncio.create_task(start_personnel_consumer())
+    yield
+    await rabbitmq_close()
+    logger.info("🛑 access-service shutdown")
+
+app = FastAPI(
+    title="EFKO Access Control Service",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TODO: ограничить в проде
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(zones_router, prefix="/api")
+if settings.environment == "development":
+    app.include_router(dev_router, prefix="/api")
+app.include_router(employees_router, prefix="/api")
+app.include_router(shifts_router, prefix="/api")
+app.include_router(attendance_router, prefix="/api")
+app.include_router(bookings_router, prefix="/api")
+app.include_router(guest_passes_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
+app.include_router(requests_router, prefix="/api")
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+@app.get("/api")
+async def root():
+    return {"message": "EFKO Access Service API", "version": "1.0.0"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host=settings.api_host,
+        port=settings.api_port
+    ) 
