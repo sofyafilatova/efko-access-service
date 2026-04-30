@@ -9,7 +9,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-import geoalchemy2 as gis
 
 
 # revision identifiers, used by Alembic.
@@ -20,9 +19,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Extensions
-    op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-    op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
+    # PostGIS недоступен на Railway — используем JSON для геоданных
+    # op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+    try:
+        op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
+    except Exception:
+        pass
 
     # Departments
     op.create_table(
@@ -80,22 +82,22 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['employee_id'], ['employees_view.id'])
     )
 
-    # Zones with PostGIS
+    # Zones (without PostGIS)
     op.create_table(
         'zones',
         sa.Column('id', sa.UUID(), nullable=False),
         sa.Column('name', sa.String(150), nullable=False),
         sa.Column('code', sa.String(20), nullable=False, unique=True),
         sa.Column('address', sa.String(255), nullable=True),
-        sa.Column('geometry', gis.Geography(geometry_type='POLYGON', srid=4326), nullable=True),
-        sa.Column('center_point', gis.Geography(geometry_type='POINT', srid=4326), nullable=True),
+        sa.Column('geometry', sa.Text(), nullable=True),          # JSON строка с координатами
+        sa.Column('center_point', sa.Text(), nullable=True),     # JSON строка {"lat": ..., "lon": ...}
         sa.Column('access_level', sa.String(20), nullable=True),
         sa.Column('parent_zone_id', sa.UUID(), nullable=True),
         sa.Column('is_active', sa.Boolean(), default=True),
         sa.PrimaryKeyConstraint('id'),
         sa.ForeignKeyConstraint(['parent_zone_id'], ['zones.id'])
     )
-    op.create_index('zones_geometry_gist', 'zones', ['geometry'], postgresql_using='gist')
+    op.create_index('zones_name_idx', 'zones', ['name'])         # простой индекс вместо gist
 
     # AccessPoints
     op.create_table(
@@ -360,6 +362,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('event_id')
     )
 
+
 def downgrade() -> None:
     op.drop_table('processed_inbound_events')
     op.drop_table('outbox_messages')
@@ -384,4 +387,4 @@ def downgrade() -> None:
     op.drop_table('positions_view')
     op.drop_table('departments_view')
     op.execute("DROP EXTENSION IF EXISTS btree_gist")
-    op.execute("DROP EXTENSION IF EXISTS postgis")
+    # op.execute("DROP EXTENSION IF EXISTS postgis")  # PostGIS не устанавливали
