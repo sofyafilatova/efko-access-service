@@ -54,7 +54,7 @@ def get_calendar(db: Session, employee_id: UUID, year: int, month: int) -> list[
 
 
 def get_month_stats(db: Session, employee_id: UUID, year: int, month: int) -> dict:
-    """Статистика за месяц для вкладки Смены в мобилке."""
+    """Статистика за месяц — считаем из реальных данных смен."""
     start = date(year, month, 1)
     if month == 12:
         end = date(year + 1, 1, 1) - timedelta(days=1)
@@ -74,32 +74,49 @@ def get_month_stats(db: Session, employee_id: UUID, year: int, month: int) -> di
     total = len(shifts)
     completed = sum(1 for s in shifts if s.status == "completed")
     missed = sum(1 for s in shifts if s.status == "missed")
+    in_progress = sum(1 for s in shifts if s.status == "in_progress")
 
-    # Суммируем часы из timesheet_entries
-    entries = (
-        db.query(TimesheetEntry)
-        .filter(
-            TimesheetEntry.employee_id == employee_id,
-            TimesheetEntry.work_date >= start,
-            TimesheetEntry.work_date <= end,
+    # Считаем плановые часы из назначенных смен
+    planned_hours = Decimal(0)
+    for s in shifts:
+        if s.status in ("completed", "in_progress", "scheduled"):
+            duration = (s.planned_end - s.planned_start).total_seconds() / 3600
+            planned_hours += Decimal(str(round(duration, 1)))
+
+    # Считаем фактические часы из attendance_records
+    actual_hours = Decimal(0)
+    for s in shifts:
+        records = (
+            db.query(AttendanceRecord)
+            .filter(
+                AttendanceRecord.shift_assignment_id == s.id,
+                AttendanceRecord.event_type == "granted",
+            )
+            .order_by(AttendanceRecord.event_at)
+            .all()
         )
-        .all()
-    )
-    total_hours = sum(
-        (e.regular_hours or Decimal(0)) for e in entries
-    )
+        check_ins = [r for r in records if r.source != "exit"]
+        check_outs = [r for r in records if r.source == "exit"]
+        if check_ins:
+            start_time = check_ins[0].event_at
+            end_time = check_outs[-1].event_at if check_outs else s.planned_end
+            hours = (end_time - start_time).total_seconds() / 3600
+            actual_hours += Decimal(str(round(hours, 1)))
 
-    planned_hours = sum(
-        Decimal(str((s.planned_end - s.planned_start).total_seconds() / 3600))
-        for s in shifts
-    )
-    efficiency = float(total_hours / planned_hours * 100) if planned_hours > 0 else 0.0
+    # Если нет attendance_records — используем плановые часы для completed/in_progress
+    if actual_hours == 0 and (completed + in_progress) > 0:
+        for s in shifts:
+            if s.status in ("completed", "in_progress"):
+                duration = (s.planned_end - s.planned_start).total_seconds() / 3600
+                actual_hours += Decimal(str(round(duration, 1)))
+
+    efficiency = float(actual_hours / planned_hours * 100) if planned_hours > 0 else 0.0
 
     return {
         "total_shifts": total,
-        "completed_shifts": completed,
+        "completed_shifts": completed + in_progress,
         "missed_shifts": missed,
-        "total_hours": total_hours,
+        "total_hours": actual_hours,
         "efficiency_percent": round(efficiency, 1),
     }
 
