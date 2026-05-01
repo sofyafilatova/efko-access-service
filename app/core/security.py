@@ -35,12 +35,14 @@ async def get_current_user(
             token,
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
+            options={"verify_iss": False}  # ядро добавляет issuer, игнорируем
         )
         user_id: str = payload.get("sub")
-        email: str = payload.get("email")
-        role: str = payload.get("role")
+        email: str = payload.get("email", "")
+        # Нормализуем роль в верхний регистр
+        role: str = (payload.get("role") or "EMPLOYEE").upper()
 
-        if not user_id or not role:
+        if not user_id:
             raise credentials_exception
 
         return CurrentUser(user_id=UUID(user_id), email=email, role=role)
@@ -48,17 +50,18 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-
 def require_roles(*roles: str):
     async def checker(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-        if user.role not in roles:
+        # Сравниваем без учёта регистра — ядро отдаёт 'manager', мы ждём 'MANAGER'
+        user_role_upper = user.role.upper()
+        allowed_upper = [r.upper() for r in roles]
+        if user_role_upper not in allowed_upper:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Required roles: {list(roles)}, your role: {user.role}"
             )
         return user
     return Depends(checker)
-
 
 # Готовые зависимости для роутеров
 AnyEmployee = Depends(get_current_user)

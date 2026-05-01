@@ -14,6 +14,9 @@ from app.routes.notifications import router as notifications_router
 import asyncio
 from app.core.rabbitmq import close as rabbitmq_close
 from app.services.personnel_consumer import start_personnel_consumer
+from app.core.config import settings
+from app.routes.requests import router as requests_router
+print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,6 +53,7 @@ app.include_router(attendance_router, prefix="/api")
 app.include_router(bookings_router, prefix="/api")
 app.include_router(guest_passes_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
+app.include_router(requests_router, prefix="/api")
 
 @app.get("/health")
 async def health():

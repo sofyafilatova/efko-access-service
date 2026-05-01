@@ -1,13 +1,18 @@
 from pydantic_settings import BaseSettings
-import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class Settings(BaseSettings):
-    database_url: str = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost/efko_access_dev")
-    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
+    database_url: str = "postgresql+psycopg2://postgres:postgres@localhost/efko_access_dev"
+    jwt_secret_key: str = "dev-secret-key"
     jwt_algorithm: str = "HS256"
-    rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
-    api_port: int = int(os.getenv("API_PORT", "8000"))
-    api_host: str = os.getenv("API_HOST", "0.0.0.0")
-    environment: str = os.getenv("ENVIRONMENT", "development")
+    rabbitmq_url: str = "amqp://guest:guest@localhost/"
+    redis_url: str = "redis://localhost:6379/0"
+    api_port: int = 8000
+    api_host: str = "0.0.0.0"
+    environment: str = "development"
 
-settings = Settings() 
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+settings = Settings()
