@@ -29,12 +29,9 @@ def get_my_profile(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    """Текущий сотрудник — для главного экрана и профиля мобилки."""
-    employee = (
-        _base_query(db)
-        .filter(EmployeeView.id == user.user_id)
-        .first()
-    )
+    # Используем employee_id из токена, если есть
+    lookup_id = user.employee_id or user.user_id
+    employee = _base_query(db).filter(EmployeeView.id == lookup_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee profile not found")
     return employee
@@ -46,26 +43,23 @@ def update_my_profile(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    """Сотрудник редактирует свой профиль (имя, телефон, аватар)."""
-    employee = db.query(EmployeeView).filter(EmployeeView.id == user.user_id).first()
+    lookup_id = user.employee_id or user.user_id
+    employee = db.query(EmployeeView).filter(EmployeeView.id == lookup_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
     profile = db.query(EmployeeProfile).filter(
-        EmployeeProfile.employee_id == user.user_id
+        EmployeeProfile.employee_id == lookup_id
     ).first()
-
     if not profile:
-        profile = EmployeeProfile(employee_id=user.user_id)
+        profile = EmployeeProfile(employee_id=lookup_id)
         db.add(profile)
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(profile, field, value)
 
     db.commit()
-
-    return _base_query(db).filter(EmployeeView.id == user.user_id).first()
-
+    return _base_query(db).filter(EmployeeView.id == lookup_id).first() 
 
 @router.get("/", response_model=list[EmployeeRead])
 def list_employees(

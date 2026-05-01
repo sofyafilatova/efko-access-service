@@ -79,7 +79,8 @@ def list_bookings(
     user: CurrentUser = AnyEmployee
 ):
     """Мои брони. Сотрудник видит только свои."""
-    q = db.query(Booking).filter(Booking.employee_id == user.user_id)
+    lookup_id = user.employee_id or user.user_id
+    q = db.query(Booking).filter(Booking.employee_id == lookup_id)
     if status:
         q = q.filter(Booking.status == status)
     return q.order_by(Booking.start_at.desc()).offset(offset).limit(limit).all()
@@ -91,11 +92,12 @@ def active_bookings(
     user: CurrentUser = AnyEmployee
 ):
     """Активные брони — главный экран мобилки."""
+    lookup_id = user.employee_id or user.user_id
     now = datetime.utcnow()
     return (
         db.query(Booking)
         .filter(
-            Booking.employee_id == user.user_id,
+            Booking.employee_id == lookup_id,
             Booking.status == "active",
             Booking.end_at >= now,
         )
@@ -111,6 +113,7 @@ def create_booking(
     user: CurrentUser = AnyEmployee
 ):
     """Создать бронь. Проверяет конфликт по времени."""
+    lookup_id = user.employee_id or user.user_id
     resource = db.query(BookableResource).filter(
         BookableResource.id == data.resource_id,
         BookableResource.is_active == True
@@ -137,7 +140,7 @@ def create_booking(
 
     booking = Booking(
         id=uuid4(),
-        employee_id=user.user_id,
+        employee_id=lookup_id,
         resource_id=data.resource_id,
         start_at=data.start_at,
         end_at=data.end_at,
@@ -157,9 +160,10 @@ def cancel_booking(
     user: CurrentUser = AnyEmployee
 ):
     """Отмена брони. Только своей."""
+    lookup_id = user.employee_id or user.user_id
     booking = db.query(Booking).filter(
         Booking.id == booking_id,
-        Booking.employee_id == user.user_id,
+        Booking.employee_id == lookup_id,
     ).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
@@ -186,16 +190,17 @@ def booking_qr(
     user: CurrentUser = AnyEmployee
 ):
     """QR-код для прохода к забронированному месту."""
+    lookup_id = user.employee_id or user.user_id
     booking = db.query(Booking).filter(
         Booking.id == booking_id,
-        Booking.employee_id == user.user_id,
+        Booking.employee_id == lookup_id,
     ).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     if booking.status != "active":
         raise HTTPException(status_code=409, detail="Booking is not active")
 
-    cred = issue_booking_qr(db, booking_id, user.user_id)
+    cred = issue_booking_qr(db, booking_id, lookup_id)
     return QRResponse(
         credential_id=cred.id,
         token_value=cred.token_value,
@@ -215,7 +220,8 @@ def my_personal_qr(
     Личный QR-пропуск сотрудника. Живёт 60 секунд.
     Каждый вызов — новый токен, старый отзывается.
     """
-    cred = issue_personal_qr(db, user.user_id, ttl_seconds=60)
+    lookup_id = user.employee_id or user.user_id
+    cred = issue_personal_qr(db, lookup_id, ttl_seconds=60)
     return QRResponse(
         credential_id=cred.id,
         token_value=cred.token_value,

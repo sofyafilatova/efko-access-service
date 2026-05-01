@@ -32,8 +32,8 @@ def current_shift(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    """Текущая смена — главный экран мобилки."""
-    return get_current_shift(db, user.user_id)
+    lookup_id = user.employee_id or user.user_id
+    return get_current_shift(db, lookup_id) 
 
 
 @router.get("/shifts/calendar", response_model=list[ShiftCalendarDay])
@@ -43,8 +43,8 @@ def shift_calendar(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    """Календарь смен на месяц — вкладка Смены в мобилке."""
-    return get_calendar(db, user.user_id, year, month)
+    lookup_id = user.employee_id or user.user_id
+    return get_calendar(db, lookup_id, year, month) 
 
 
 @router.get("/shifts/stats/month", response_model=MonthStats)
@@ -54,8 +54,8 @@ def month_stats(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    """Статистика за месяц — вкладка Смены в мобилке."""
-    return get_month_stats(db, user.user_id, year, month)
+    lookup_id = user.employee_id or user.user_id
+    return get_month_stats(db, lookup_id, year, month) 
 
 
 @router.get("/shifts/{shift_id}", response_model=ShiftAssignmentRead)
