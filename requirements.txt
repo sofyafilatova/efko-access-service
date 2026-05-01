@@ -3,12 +3,12 @@ uvicorn[standard]==0.24.0
 sqlalchemy==2.0.23
 alembic==1.13.0
 psycopg2-binary==2.9.9
-pydantic==2.10.6
+geoalchemy2==0.14.1
+pydantic==2.5.0
 python-dotenv==1.0.0
-aio-pika==9.6.2
+aio-pika>=9.4.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 httpx==0.25.2
 pytest==7.4.3
 pytest-asyncio==0.21.1
-pydantic-settings==2.0.3

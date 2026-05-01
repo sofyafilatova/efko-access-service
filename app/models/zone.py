@@ -1,7 +1,8 @@
 import uuid
-from sqlalchemy import String, Boolean, ForeignKey, Text
+from sqlalchemy import String, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from geoalchemy2 import Geography
 from app.models.base import Base
 
 
@@ -12,8 +13,8 @@ class Zone(Base):
     name: Mapped[str] = mapped_column(String(150))
     code: Mapped[str] = mapped_column(String(20), unique=True)
     address: Mapped[str | None] = mapped_column(String(255))
-    geometry: Mapped[str | None] = mapped_column(Text)       # JSON: {"type":"Polygon","coordinates":[...]}
-    center_point: Mapped[str | None] = mapped_column(Text)   # JSON: {"lat":50.64,"lon":38.69}
+    geometry: Mapped[object | None] = mapped_column(Geography(geometry_type="POLYGON", srid=4326))
+    center_point: Mapped[object | None] = mapped_column(Geography(geometry_type="POINT", srid=4326))
     access_level: Mapped[str | None] = mapped_column(String(20), default="restricted")
     parent_zone_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("zones.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

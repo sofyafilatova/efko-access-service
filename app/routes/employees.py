@@ -97,7 +97,7 @@ def list_employees(
 def get_employee(
     employee_id: UUID,
     db: Session = Depends(get_db),
-    _: CurrentUser = AnyEmployee
+    _: CurrentUser = ShiftManagerPlus
 ):
     employee = _base_query(db).filter(EmployeeView.id == employee_id).first()
     if not employee:

@@ -1,10 +1,11 @@
-import os
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+
 from alembic import context
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.models import Base
@@ -13,21 +14,21 @@ from app.models import Base
 # access to the values within the .ini file in use.
 config = context.config
 
-# Читаем DATABASE_URL из переменной окружения (Railway/prod)
-# Если нет — берём из alembic.ini (локальная разработка)
-database_url = os.environ.get("DATABASE_URL")
-if database_url:
-    # Railway даёт postgres://, SQLAlchemy требует postgresql://
-    if database_url.startswith("postgres://"):
-        database_url = database_url.replace("postgres://", "postgresql://", 1)
-    config.set_main_option("sqlalchemy.url", database_url)
-
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# add your model's MetaData object here
+# for 'autogenerate' support
+# from myapp import mymodel
+# target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
 
 
 def run_migrations_offline() -> None:
