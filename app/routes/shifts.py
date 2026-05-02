@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timedelta
+from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.security import (
@@ -19,13 +20,26 @@ from app.services.shift_service import (
     get_month_stats, generate_timesheet
 )
 
-import asyncio
-from app.core.rabbitmq import publish_event
-
 router = APIRouter(tags=["Shifts"])
 
 
-# ─── Смены ────────────────────────────────────────────────────────────────────
+def _auto_update_shift_status(db: Session, employee_id: UUID):
+    """Автоматически обновляет статусы смен по текущему времени."""
+    now = datetime.utcnow()
+    shifts = db.query(ShiftAssignment).filter(
+        ShiftAssignment.employee_id == employee_id
+    ).all()
+    changed = False
+    for s in shifts:
+        if s.status == "scheduled" and s.planned_start <= now <= s.planned_end:
+            s.status = "in_progress"
+            changed = True
+        elif s.status in ("scheduled", "in_progress") and s.planned_end < now:
+            s.status = "completed"
+            changed = True
+    if changed:
+        db.commit()
+
 
 @router.get("/shifts/current", response_model=ShiftAssignmentRead | None)
 def current_shift(
@@ -33,7 +47,8 @@ def current_shift(
     user: CurrentUser = AnyEmployee
 ):
     lookup_id = user.employee_id or user.user_id
-    return get_current_shift(db, lookup_id) 
+    _auto_update_shift_status(db, lookup_id)
+    return get_current_shift(db, lookup_id)
 
 
 @router.get("/shifts/calendar", response_model=list[ShiftCalendarDay])
@@ -44,7 +59,8 @@ def shift_calendar(
     user: CurrentUser = AnyEmployee
 ):
     lookup_id = user.employee_id or user.user_id
-    return get_calendar(db, lookup_id, year, month) 
+    _auto_update_shift_status(db, lookup_id)
+    return get_calendar(db, lookup_id, year, month)
 
 
 @router.get("/shifts/stats/month", response_model=MonthStats)
@@ -55,7 +71,65 @@ def month_stats(
     user: CurrentUser = AnyEmployee
 ):
     lookup_id = user.employee_id or user.user_id
-    return get_month_stats(db, lookup_id, year, month) 
+    return get_month_stats(db, lookup_id, year, month)
+
+
+class ExtendShiftRequest(BaseModel):
+    hours: int  # на сколько часов продлить (1-12)
+
+
+@router.patch("/shifts/current/extend")
+def extend_current_shift(
+    data: ExtendShiftRequest,
+    db: Session = Depends(get_db),
+    user: CurrentUser = AnyEmployee
+):
+    """Продление текущей смены. Пишет в shift_assignments и создаёт request."""
+    if data.hours < 1 or data.hours > 12:
+        raise HTTPException(400, "Hours must be between 1 and 12")
+
+    lookup_id = user.employee_id or user.user_id
+    now = datetime.utcnow()
+
+    shift = db.query(ShiftAssignment).filter(
+        ShiftAssignment.employee_id == lookup_id,
+        ShiftAssignment.planned_start <= now,
+        ShiftAssignment.planned_end >= now - timedelta(hours=1),
+    ).first()
+
+    if not shift:
+        raise HTTPException(404, "No active shift to extend")
+
+    old_end = shift.planned_end
+    new_end = old_end + timedelta(hours=data.hours)
+    shift.planned_end = new_end
+    db.commit()
+    db.refresh(shift)
+
+    # Фиксируем в таблице requests
+    from app.models.notification import Request
+    req = Request(
+        id=uuid4(),
+        employee_id=lookup_id,
+        type="extend_shift",
+        status="approved",  # автоодобрено — сотрудник сам продлил
+        payload={
+            "shift_id": str(shift.id),
+            "old_end": old_end.isoformat(),
+            "new_end": new_end.isoformat(),
+            "hours_added": data.hours,
+        },
+        created_at=now,
+        processed_at=now,
+    )
+    db.add(req)
+    db.commit()
+
+    return {
+        "shift_id": str(shift.id),
+        "new_planned_end": new_end.isoformat(),
+        "hours_added": data.hours,
+    }
 
 
 @router.get("/shifts/{shift_id}", response_model=ShiftAssignmentRead)
@@ -76,7 +150,6 @@ def create_shift(
     db: Session = Depends(get_db),
     user: CurrentUser = ManagerOnly
 ):
-    """Назначить смену сотруднику."""
     existing = (
         db.query(ShiftAssignment)
         .filter(
@@ -86,10 +159,7 @@ def create_shift(
         .first()
     )
     if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Shift for {data.shift_date} already exists for this employee"
-        )
+        raise HTTPException(409, f"Shift for {data.shift_date} already exists")
 
     shift = ShiftAssignment(
         id=uuid4(),
@@ -106,15 +176,12 @@ def create_shift(
     return shift
 
 
-# ─── Табели ───────────────────────────────────────────────────────────────────
-
 @router.post("/timesheets", response_model=TimesheetRead, status_code=201)
 def create_timesheet(
     data: TimesheetCreate,
     db: Session = Depends(get_db),
     user: CurrentUser = ManagerOnly
 ):
-    """Сформировать табель за период. Статус: draft."""
     existing = (
         db.query(Timesheet)
         .filter(
@@ -125,10 +192,7 @@ def create_timesheet(
         .first()
     )
     if existing:
-        raise HTTPException(
-            status_code=409,
-            detail="Timesheet for this department and period already exists"
-        )
+        raise HTTPException(409, "Timesheet already exists")
 
     timesheet = generate_timesheet(
         db,
@@ -165,7 +229,7 @@ def get_timesheet(
 ):
     ts = db.query(Timesheet).filter(Timesheet.id == timesheet_id).first()
     if not ts:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
+        raise HTTPException(404, "Timesheet not found")
     return ts
 
 
@@ -177,7 +241,6 @@ def update_timesheet_entry(
     db: Session = Depends(get_db),
     _: CurrentUser = ManagerOnly
 ):
-    """HR вручную корректирует строку табеля."""
     entry = (
         db.query(TimesheetEntry)
         .filter(
@@ -187,7 +250,7 @@ def update_timesheet_entry(
         .first()
     )
     if not entry:
-        raise HTTPException(status_code=404, detail="Entry not found")
+        raise HTTPException(404, "Entry not found")
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(entry, field, value)
@@ -204,28 +267,15 @@ def close_timesheet(
     db: Session = Depends(get_db),
     user: CurrentUser = ManagerOnly
 ):
-    """Закрыть табель. После закрытия редактирование недоступно."""
     ts = db.query(Timesheet).filter(Timesheet.id == timesheet_id).first()
     if not ts:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
+        raise HTTPException(404, "Timesheet not found")
     if ts.status != "draft":
-        raise HTTPException(status_code=409, detail=f"Cannot close timesheet with status '{ts.status}'")
+        raise HTTPException(409, f"Cannot close timesheet with status '{ts.status}'")
 
     ts.status = "closed"
     ts.closed_at = datetime.utcnow()
     db.commit()
-
-    try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(publish_event("access.timesheet.closed", {
-            "timesheet_id": str(timesheet_id),
-            "department_id": str(ts.department_id),
-            "period_start": str(ts.period_start),
-            "period_end": str(ts.period_end),
-            "closed_at": ts.closed_at.isoformat(),
-        }))
-    except Exception:
-        pass
     return {"id": timesheet_id, "status": "closed"}
 
 
@@ -235,44 +285,36 @@ def export_timesheet_csv(
     db: Session = Depends(get_db),
     _: CurrentUser = ManagerOnly
 ):
-    """Экспорт табеля в CSV для 1С:ЗУП."""
     from fastapi.responses import StreamingResponse
-    import csv
-    import io
-
+    import csv, io
     ts = db.query(Timesheet).filter(Timesheet.id == timesheet_id).first()
     if not ts:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
+        raise HTTPException(404, "Timesheet not found")
 
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
     writer.writerow([
         "ТабельныйНомер", "ФИО", "Дата", "ВидВремени",
         "КоличествоЧасов", "НочныеЧасы", "СверхурочныеЧасы",
-        "РучнаяКорректировка", "Причина"
+        "РучнаяКорректировка"
     ])
-
     for entry in ts.entries:
-        employee = db.query(
-            __import__('app.models.employee', fromlist=['EmployeeView']).EmployeeView
-        ).filter_by(id=entry.employee_id).first()
-
+        from app.models.employee import EmployeeView
+        emp = db.query(EmployeeView).filter_by(id=entry.employee_id).first()
         writer.writerow([
-            employee.personnel_number if employee else "",
-            employee.full_name if employee else "",
+            emp.personnel_number if emp else "",
+            emp.full_name if emp else "",
             entry.work_date.strftime("%d.%m.%Y"),
             entry.time_kind,
             str(entry.regular_hours or 0),
             str(entry.night_hours or 0),
             str(entry.overtime_hours or 0),
             "Да" if entry.was_manually_adjusted else "Нет",
-            entry.adjustment_reason or "",
         ])
 
     output.seek(0)
-    filename = f"timesheet_{ts.period_start}_{ts.period_end}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename=timesheet.csv"}
     )

@@ -20,16 +20,14 @@ def create_request(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    lookup_id = user.employee_id or user.user_id
     if data.type not in VALID_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid type. Must be one of: {VALID_TYPES}"
-        )
+        raise HTTPException(400, detail=f"Invalid type. Must be one of: {VALID_TYPES}")
+
+    lookup_id = user.employee_id or user.user_id
 
     req = Request(
         id=uuid4(),
-        employee_id=lookup_id,  # ← было user.user_id
+        employee_id=lookup_id,
         type=data.type,
         status="pending",
         payload=data.payload,
@@ -38,7 +36,8 @@ def create_request(
     db.add(req)
     db.commit()
     db.refresh(req)
-    return req 
+    return req
+
 
 @router.get("/my", response_model=list[RequestRead])
 def my_requests(
