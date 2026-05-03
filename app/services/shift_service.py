@@ -64,10 +64,13 @@ def get_calendar(db: Session, employee_id: UUID, year: int, month: int) -> list[
         if shift:
             entry["shift"] = {
                 "id": str(shift.id),
-                "status": getattr(shift, '_display_status', shift.status),
+                "employee_id": str(shift.employee_id),
+                "shift_template_id": str(shift.shift_template_id) if shift.shift_template_id else None,
+                "shift_date": shift.shift_date.isoformat(),
                 "planned_start": shift.planned_start.isoformat(),
                 "planned_end": shift.planned_end.isoformat(),
-                "shift_date": shift.shift_date.isoformat(),
+                "status": getattr(shift, '_display_status', shift.status),
+                "source_event_id": None,
             }
         result.append(entry)
         current += timedelta(days=1)
