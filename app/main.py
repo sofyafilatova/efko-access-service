@@ -34,7 +34,6 @@ app = FastAPI(
     title="EFKO Access Control Service",
     version="1.0.0",
     lifespan=lifespan,
-    redirect_slashes=False,
 )
 
 app.add_middleware(
