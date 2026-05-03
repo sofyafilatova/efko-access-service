@@ -11,7 +11,7 @@ from app.schemas.guest_pass import GuestPassCreate, GuestPassRead
 from app.services.qr_service import issue_guest_qr
 from app.schemas.booking import QRResponse
 
-router = APIRouter(prefix="/guest-passes", tags=["Guest Passes"])
+router = APIRouter(prefix="/guest-passes", tags=["Guest Passes"], redirect_slashes=False)
 
 
 @router.post("/", response_model=GuestPassRead, status_code=201)

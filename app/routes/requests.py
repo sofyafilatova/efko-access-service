@@ -9,7 +9,7 @@ from app.models.notification import Request, Notification
 from app.schemas.request import RequestCreate, RequestRead, RequestApprove, RequestReject
 from app.services.notification_service import create_notification
 
-router = APIRouter(prefix="/requests", tags=["Requests"])
+router = APIRouter(prefix="/requests", tags=["Requests"], redirect_slashes=False)
 
 VALID_TYPES = {"shift_change", "profile_change", "extend_shift", "additional_access"}
 
