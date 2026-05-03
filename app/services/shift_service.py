@@ -22,14 +22,12 @@ def get_current_shift(db: Session, employee_id: UUID) -> ShiftAssignment | None:
 
 
 def get_calendar(db: Session, employee_id: UUID, year: int, month: int) -> list[dict]:
-    """Смены за месяц. Без фильтра по статусу — показываем все."""
     start = date(year, month, 1)
     if month == 12:
         end = date(year + 1, 1, 1) - timedelta(days=1)
     else:
         end = date(year, month + 1, 1) - timedelta(days=1)
 
-    # Получаем ВСЕ смены за месяц без фильтра по статусу
     shifts = (
         db.query(ShiftAssignment)
         .filter(
@@ -40,20 +38,40 @@ def get_calendar(db: Session, employee_id: UUID, year: int, month: int) -> list[
         .all()
     )
 
+    # Обогащаем статус: если есть продление — overtime
+    for s in shifts:
+        if s.status in ("completed", "in_progress"):
+            original_duration = 12  # стандартная смена 12 часов
+            actual_duration = (s.planned_end - s.planned_start).total_seconds() / 3600
+            if actual_duration > original_duration:
+                s._display_status = "overtime"
+            else:
+                s._display_status = s.status
+        else:
+            s._display_status = s.status
+
     shift_map = {s.shift_date: s for s in shifts}
 
     result = []
     current = start
     while current <= end:
         shift = shift_map.get(current)
-        result.append({
+        entry = {
             "date": current.isoformat(),
             "has_shift": current in shift_map,
-            "shift": shift,
-        })
+            "shift": None,
+        }
+        if shift:
+            entry["shift"] = {
+                "id": str(shift.id),
+                "status": getattr(shift, '_display_status', shift.status),
+                "planned_start": shift.planned_start.isoformat(),
+                "planned_end": shift.planned_end.isoformat(),
+                "shift_date": shift.shift_date.isoformat(),
+            }
+        result.append(entry)
         current += timedelta(days=1)
     return result
-
 
 def get_month_stats(db: Session, employee_id: UUID, year: int, month: int) -> dict:
     start = date(year, month, 1)

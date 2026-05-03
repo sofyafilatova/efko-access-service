@@ -23,6 +23,7 @@ def create_request(
     if data.type not in VALID_TYPES:
         raise HTTPException(400, detail=f"Invalid type. Must be one of: {VALID_TYPES}")
 
+    # ИСПРАВЛЕНИЕ: используем employee_id из токена
     lookup_id = user.employee_id or user.user_id
 
     req = Request(
@@ -37,7 +38,6 @@ def create_request(
     db.commit()
     db.refresh(req)
     return req
-
 
 @router.get("/my", response_model=list[RequestRead])
 def my_requests(

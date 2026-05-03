@@ -20,19 +20,20 @@ def create_guest_pass(
     db: Session = Depends(get_db),
     user: CurrentUser = AnyEmployee
 ):
-    """Сотрудник приглашает гостя."""
     if data.valid_until <= data.valid_from:
         raise HTTPException(status_code=400, detail="valid_until must be after valid_from")
 
-    # Проверяем что зоны существуют
     for zone_id in data.zone_ids:
         zone = db.query(Zone).filter(Zone.id == zone_id, Zone.is_active == True).first()
         if not zone:
             raise HTTPException(status_code=404, detail=f"Zone {zone_id} not found")
 
+    # ИСПРАВЛЕНИЕ: используем employee_id из токена, не user_id
+    invited_by = user.employee_id or user.user_id
+
     guest_pass = GuestPass(
         id=uuid4(),
-        invited_by_employee_id=user.user_id,
+        invited_by_employee_id=invited_by,
         guest_full_name=data.guest_full_name,
         guest_phone=data.guest_phone,
         guest_company=data.guest_company,
@@ -44,7 +45,6 @@ def create_guest_pass(
     db.add(guest_pass)
     db.flush()
 
-    # Связываем зоны через guest_pass_zones
     for zone_id in data.zone_ids:
         db.execute(
             __import__('sqlalchemy').text(
