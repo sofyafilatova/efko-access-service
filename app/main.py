@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.routes.requests import router as requests_router
 
 app.include_router(web_employees_router, prefix="/api")
+
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
 logging.basicConfig(level=logging.INFO)
