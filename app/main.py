@@ -16,8 +16,7 @@ from app.core.rabbitmq import close as rabbitmq_close
 from app.services.personnel_consumer import start_personnel_consumer
 from app.core.config import settings
 from app.routes.requests import router as requests_router
-
-app.include_router(web_employees_router, prefix="/api")
+from app.routes.web_employees import router as web_employees_router   # ← импорт
 
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
@@ -27,7 +26,6 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 access-service starting...")
-    # Запускаем consumer в фоне — не блокирует старт сервера
     asyncio.create_task(start_personnel_consumer())
     yield
     await rabbitmq_close()
@@ -41,7 +39,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: ограничить в проде
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,6 +55,7 @@ app.include_router(bookings_router, prefix="/api")
 app.include_router(guest_passes_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(requests_router, prefix="/api")
+app.include_router(web_employees_router, prefix="/api")   # ← подключение ПОСЛЕ создания app
 
 @app.get("/health")
 async def health():
@@ -72,4 +71,4 @@ if __name__ == "__main__":
         app,
         host=settings.api_host,
         port=settings.api_port
-    ) 
+    )
