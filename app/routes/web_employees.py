@@ -1,25 +1,74 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.models.employee import EmployeeView
+from app.models.employee import EmployeeView, PositionView, LocationView
 
 router = APIRouter(prefix="/web/employees", tags=["Web - Employees"])
 
 @router.get("/list")
-def list_employees(
+def list_employees_full(
+    search: str | None = Query(None),
+    location_id: str | None = None,
+    status: str | None = "active",
     limit: int = Query(50, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    employees = db.query(EmployeeView).offset(offset).limit(limit).all()
-    result = []
-    for emp in employees:
-        result.append({
-            "id": str(emp.id),
-            "personnel_number": emp.personnel_number,
-            "full_name": emp.full_name,
-            "position": None,
-            "location": None,
-            "status": emp.status,
-        })
-    return {"total": len(result), "items": result}
+    """Список сотрудников с JOIN-ами (должность, офис) для веб-панели."""
+    
+    q = db.query(
+        EmployeeView.id,
+        EmployeeView.personnel_number,
+        EmployeeView.full_name,
+        EmployeeView.status,
+        EmployeeView.employment_type,
+        PositionView.title.label("position_title"),
+        LocationView.name.label("location_name"),
+        LocationView.city.label("location_city"),
+    ).outerjoin(PositionView, EmployeeView.position_id == PositionView.id)\
+     .outerjoin(LocationView, EmployeeView.location_id == LocationView.id)
+
+    if status:
+        q = q.filter(EmployeeView.status == status)
+    if location_id:
+        q = q.filter(EmployeeView.location_id == location_id)
+    if search:
+        q = q.filter(
+            EmployeeView.full_name.ilike(f"%{search}%") |
+            EmployeeView.personnel_number.ilike(f"%{search}%")
+        )
+
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": str(r.id),
+                "personnel_number": r.personnel_number,
+                "full_name": r.full_name,
+                "position": r.position_title or "—",
+                "location": r.location_name or "—",
+                "city": r.location_city or "—",
+                "status": r.status,
+                "employment_type": r.employment_type,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/locations")
+def list_locations(db: Session = Depends(get_db)):
+    """Список офисов/заводов для фильтра."""
+    locs = db.query(LocationView).order_by(LocationView.name).all()
+    return [
+        {
+            "id": str(l.id),
+            "name": l.name,
+            "city": l.city or "—",
+            "type": l.type,
+        }
+        for l in locs
+    ]
