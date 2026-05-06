@@ -1,5 +1,8 @@
 from app.models.base import Base
-from app.models.employee import DepartmentView, PositionView, EmployeeView, EmployeeProfile
+from app.models.employee import (
+    DepartmentView, PositionView, EmployeeView, EmployeeProfile,
+    LocationView, ProductionLineView, WorkstationView  # добавьте
+)
 from app.models.zone import Zone, AccessPoint
 from app.models.access import AccessCard, AccessRight, Credential
 from app.models.shift import ShiftAssignment, AttendanceRecord, Timesheet, TimesheetEntry

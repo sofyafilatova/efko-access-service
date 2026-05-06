@@ -14,10 +14,10 @@ KERNEL_URL = "https://microkernel-kmpo.duckdns.org/api"
 OUR_API    = "http://localhost:8000/api"
 
 DB_CONFIG = {
-    "dbname":   "efko_access_dev",
+    "dbname":   "railway",
     "user":     "postgres",
-    "password": "postgres",
-    "host":     "localhost",
+    "password": r"ymCTYuoHanxBUnnlkaZRTJHzEZGyTpSH",
+    "host":     "postgres.railway.internal",
     "port":     5432,
 }
 

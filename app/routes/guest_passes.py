@@ -13,7 +13,6 @@ from app.schemas.booking import QRResponse
 
 router = APIRouter(prefix="/guest-passes", tags=["Guest Passes"], redirect_slashes=False)
 
-
 @router.post("/", response_model=GuestPassRead, status_code=201)
 def create_guest_pass(
     data: GuestPassCreate,
