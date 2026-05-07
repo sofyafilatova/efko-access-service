@@ -1,10 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
 from app.core.database import get_db
 from app.models.employee import EmployeeView, LocationView, PositionView
 from app.models.shift import ShiftAssignment
-from datetime import datetime, date
+from datetime import datetime
 
 router = APIRouter(prefix="/web/shifts", tags=["Web - Shifts"])
 
@@ -20,8 +19,8 @@ def get_shifts_by_date(
     """
     target_date = datetime.strptime(shift_date, "%Y-%m-%d").date()
     
-    # Запрос смен с JOIN на сотрудников, локации, должности
-    shifts = (
+    # Базовый запрос с JOIN
+    query = (
         db.query(
             ShiftAssignment,
             EmployeeView.full_name,
@@ -34,15 +33,16 @@ def get_shifts_by_date(
         .outerjoin(LocationView, EmployeeView.location_id == LocationView.id)
         .outerjoin(PositionView, EmployeeView.position_id == PositionView.id)
         .filter(ShiftAssignment.shift_date == target_date)
-        .all()
     )
     
     # Фильтр по локации (офису)
     if location_id:
-        shifts = [s for s in shifts if s[0].employee.location_id == location_id]
+        query = query.filter(EmployeeView.location_id == location_id)
+    
+    results = query.all()
     
     result = []
-    for shift, full_name, personnel_number, emp_status, location_name, position_title in shifts:
+    for shift, full_name, personnel_number, emp_status, location_name, position_title in results:
         planned_start = shift.planned_start.strftime("%H:%M")
         planned_end = shift.planned_end.strftime("%H:%M")
         
@@ -59,9 +59,8 @@ def get_shifts_by_date(
         shift_status_display = shift_status_map.get(shift.status, shift.status)
         
         # Эффективность (примерная логика)
-        efficiency = None
+        efficiency = "—"
         if shift.status == "completed":
-            # Если смена завершена и была прогул? — нет, это completed
             efficiency = "100%"
         elif shift.status == "in_progress":
             efficiency = "В процессе"
@@ -69,8 +68,6 @@ def get_shifts_by_date(
             efficiency = "0%"
         elif shift.status == "overtime":
             efficiency = "переработка"
-        else:
-            efficiency = "—"
         
         result.append({
             "employee_id": str(shift.employee_id),
