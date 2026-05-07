@@ -17,6 +17,7 @@ from app.services.personnel_consumer import start_personnel_consumer
 from app.core.config import settings
 from app.routes.requests import router as requests_router
 from app.routes.web_employees import router as web_employees_router   # ← импорт
+from app.routes.web_shifts import router as web_shifts_router
 
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
@@ -56,6 +57,7 @@ app.include_router(guest_passes_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(requests_router, prefix="/api")
 app.include_router(web_employees_router, prefix="/api")   # ← подключение ПОСЛЕ создания app
+app.include_router(web_shifts_router, prefix="/api")
 
 @app.get("/health")
 async def health():
