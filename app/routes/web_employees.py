@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.models.employee import EmployeeView, PositionView, LocationView
+from app.models.employee import EmployeeView, PositionView, LocationView, WorkstationView
 
 router = APIRouter(prefix="/web/employees", tags=["Web - Employees"])
 
@@ -14,7 +14,9 @@ def list_employees_full(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Список сотрудников с JOIN-ами (должность, офис) для веб-панели."""
+    """Список сотрудников с JOIN-ами.
+    Логика: employees_view.workstation_id → workstations_view.id → workstations_view.location_id → locations_view.id
+    """
     
     q = db.query(
         EmployeeView.id,
@@ -26,12 +28,13 @@ def list_employees_full(
         LocationView.name.label("location_name"),
         LocationView.city.label("location_city"),
     ).outerjoin(PositionView, EmployeeView.position_id == PositionView.id)\
-     .outerjoin(LocationView, EmployeeView.location_id == LocationView.id)
+     .outerjoin(WorkstationView, EmployeeView.workstation_id == WorkstationView.id)\
+     .outerjoin(LocationView, WorkstationView.location_id == LocationView.id)
 
     if status:
         q = q.filter(EmployeeView.status == status)
     if location_id:
-        q = q.filter(EmployeeView.location_id == location_id)
+        q = q.filter(LocationView.id == location_id)
     if search:
         q = q.filter(
             EmployeeView.full_name.ilike(f"%{search}%") |
