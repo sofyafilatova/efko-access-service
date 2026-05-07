@@ -4,7 +4,6 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import BaseModel
 from app.core.database import get_db
-from app.core.security import AnyEmployee, CurrentUser
 from app.models.access import AccessRight
 
 router = APIRouter(prefix="/access-rights", tags=["Access Rights"])
@@ -21,9 +20,8 @@ class AccessRightCreate(BaseModel):
 def get_access_rights(
     employee_id: UUID = Query(...),
     db: Session = Depends(get_db),
-    user: CurrentUser = AnyEmployee,
 ):
-    """Список прав сотрудника на зоны (для веб-панели)"""
+    """Список прав сотрудника на зоны"""
     rights = db.query(AccessRight).filter(AccessRight.employee_id == employee_id).all()
     return [
         {
@@ -43,7 +41,6 @@ def get_access_rights(
 def create_or_update_access_right(
     data: AccessRightCreate,
     db: Session = Depends(get_db),
-    user: CurrentUser = AnyEmployee,
 ):
     """Выдать или отозвать доступ сотрудника к зоне"""
     existing = db.query(AccessRight).filter(

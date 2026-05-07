@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
 import uuid
 
 from app.core.database import get_db
-from app.core.security import AnyEmployee, AdminOnly, CurrentUser
 from app.models.zone import Zone
 from app.schemas.zone import ZoneCreate, ZoneUpdate, ZoneRead
 from app.models.zone import AccessPoint
@@ -14,11 +13,10 @@ router = APIRouter(prefix="/zones", tags=["Zones"])
 
 @router.get("/", response_model=list[ZoneRead])
 def get_zones(
-    is_active: bool = True,
-    limit: int = 50,
-    offset: int = 0,
+    is_active: bool = Query(True),
+    limit: int = Query(50, le=200),
+    offset: int = Query(0),
     db: Session = Depends(get_db),
-    _: CurrentUser = AnyEmployee
 ):
     zones = db.query(Zone).filter(Zone.is_active == is_active).offset(offset).limit(limit).all()
     return zones
@@ -28,7 +26,6 @@ def get_zones(
 def get_zone(
     zone_id: UUID,
     db: Session = Depends(get_db),
-    _: CurrentUser = AnyEmployee
 ):
     zone = db.query(Zone).filter(Zone.id == zone_id).first()
     if not zone:
@@ -40,7 +37,6 @@ def get_zone(
 def create_zone(
     data: ZoneCreate,
     db: Session = Depends(get_db),
-    _: CurrentUser = AdminOnly
 ):
     existing = db.query(Zone).filter(Zone.code == data.code).first()
     if existing:
@@ -66,7 +62,6 @@ def update_zone(
     zone_id: UUID,
     data: ZoneUpdate,
     db: Session = Depends(get_db),
-    _: CurrentUser = AdminOnly
 ):
     zone = db.query(Zone).filter(Zone.id == zone_id).first()
     if not zone:
@@ -84,7 +79,6 @@ def update_zone(
 def delete_zone(
     zone_id: UUID,
     db: Session = Depends(get_db),
-    _: CurrentUser = AdminOnly
 ):
     zone = db.query(Zone).filter(Zone.id == zone_id).first()
     if not zone:
@@ -92,12 +86,13 @@ def delete_zone(
 
     zone.is_active = False
     db.commit()
+    return None
+
 
 @router.get("/{zone_id}/access-points")
 def get_zone_access_points(
     zone_id: UUID,
     db: Session = Depends(get_db),
-    _: CurrentUser = AnyEmployee
 ):
     zone = db.query(Zone).filter(Zone.id == zone_id).first()
     if not zone:
@@ -117,4 +112,3 @@ def get_zone_access_points(
         }
         for p in points
     ]
-
