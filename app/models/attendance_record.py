@@ -7,6 +7,7 @@ from app.models.base import Base
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     employee_id = Column(UUID(as_uuid=True), ForeignKey("employees_view.id"), nullable=False)
