@@ -24,6 +24,7 @@ from app.routes import web_employees, web_shifts, web_employee_status
 # 👇 НОВЫЕ ИМПОРТЫ — добавляем сам роутер
 from app.routes.web_employee_status import router as web_employee_status_router
 from app.routes.web_notifications import router as web_notifications_router
+from app.routes.attendance_web import router as attendance_web_router
 
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
@@ -66,6 +67,7 @@ app.include_router(web_employees_router, prefix="/api")
 app.include_router(web_shifts_router, prefix="/api")
 app.include_router(access_rights_router, prefix="/api")
 app.include_router(web_notifications_router, prefix="/api")
+app.include_router(attendance_web_router, prefix="/api")
 
 # 👇 НОВЫЕ ПОДКЛЮЧЕНИЯ (ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ)
 app.include_router(web_employee_status_router, prefix="/api")
