@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.core.database import get_db
-from app.models.access_rights import AccessRight  # проверь имя модели
+from app.models.access import AccessRight   # проверь имя модели
 from app.models.attendance_record import AttendanceRecord
 from app.models.access_point import AccessPoint
 from app.models.zone import Zone
