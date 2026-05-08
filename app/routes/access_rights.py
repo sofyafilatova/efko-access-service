@@ -5,6 +5,8 @@ from datetime import datetime
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.access import AccessRight
+from app.models.notification import Notification
+from app.models.zone import Zone
 
 router = APIRouter(prefix="/access-rights", tags=["Access Rights"])
 
@@ -43,17 +45,28 @@ def create_or_update_access_right(
     db: Session = Depends(get_db),
 ):
     """Выдать или отозвать доступ сотрудника к зоне"""
+    
+    # Получаем название зоны
+    zone = db.query(Zone).filter(Zone.id == data.zone_id).first()
+    zone_name = zone.name if zone else "неизвестная зона"
+    
     existing = db.query(AccessRight).filter(
         AccessRight.employee_id == data.employee_id,
         AccessRight.zone_id == data.zone_id,
     ).first()
     
     if existing:
+        old_status = existing.is_permitted
         existing.is_permitted = data.is_permitted
         existing.granted_by_user_id = data.granted_by_user_id
         existing.reason = data.reason
         existing.granted_at = datetime.utcnow()
         db.commit()
+        
+        # Отправляем уведомление только если статус изменился
+        if old_status != data.is_permitted:
+            create_notification(db, data.employee_id, data.is_permitted, zone_name, data.reason)
+        
         return {"message": "updated"}
     else:
         new_right = AccessRight(
@@ -67,4 +80,36 @@ def create_or_update_access_right(
         )
         db.add(new_right)
         db.commit()
+        
+        # Отправляем уведомление о выдаче права
+        if data.is_permitted:
+            create_notification(db, data.employee_id, data.is_permitted, zone_name, data.reason)
+        
         return {"message": "created"}
+
+
+def create_notification(db: Session, employee_id: UUID, is_permitted: bool, zone_name: str, reason: str | None):
+    """Создаёт уведомление для сотрудника об изменении прав доступа"""
+    
+    if is_permitted:
+        title = "🔓 Доступ выдан"
+        body = f"Вам выдан доступ в зону: {zone_name}"
+        if reason:
+            body += f"\nПричина: {reason}"
+    else:
+        title = "🔒 Доступ отозван"
+        body = f"У вас отозван доступ в зону: {zone_name}"
+        if reason:
+            body += f"\nПричина: {reason}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=employee_id,
+        title=title,
+        body=body,
+        category="access_rights",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    db.commit()
