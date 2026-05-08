@@ -4,6 +4,7 @@ from sqlalchemy import text
 from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import BaseModel
+from typing import Optional
 
 from app.core.database import get_db
 from app.models.employee import EmployeeView
@@ -15,7 +16,7 @@ class StatusUpdateRequest(BaseModel):
     employee_id: UUID
     new_status: str
     reason: str
-    changed_by_user_id: UUID
+    changed_by_user_id: Optional[UUID] = None  # ← Сделал опциональным
 
 @router.put("/status")
 def change_employee_status(
@@ -26,8 +27,12 @@ def change_employee_status(
     
     print(f"🔧 Запрос на изменение статуса: {data.dict()}")
     
-    if data.new_status not in ["active", "inactive"]:
+    # Разрешаем как inactive, так и terminated (оба варианта)
+    if data.new_status not in ["active", "inactive", "terminated"]:
         raise HTTPException(status_code=400, detail="Invalid status")
+    
+    # Нормализуем статус: если пришло terminated, сохраняем как есть
+    final_status = data.new_status
     
     # Находим сотрудника
     employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
@@ -39,17 +44,17 @@ def change_employee_status(
     # Обновляем статус через сырой SQL с text()
     try:
         db.execute(
-            text(f"UPDATE employees_view SET status = '{data.new_status}' WHERE id = '{data.employee_id}'")
+            text(f"UPDATE employees_view SET status = '{final_status}' WHERE id = '{data.employee_id}'")
         )
         db.commit()
-        print(f"✅ Статус обновлён: {old_status} → {data.new_status}")
+        print(f"✅ Статус обновлён: {old_status} → {final_status}")
     except Exception as e:
         db.rollback()
         print(f"❌ Ошибка БД: {e}")
         raise HTTPException(status_code=500, detail=f"DB error: {str(e)}")
     
     # Создаём уведомление
-    if data.new_status == "inactive":
+    if final_status in ["inactive", "terminated"]:
         title = "❌ Доступ заблокирован"
         body = f"Ваш доступ к системе заблокирован. Причина: {data.reason}"
     else:
@@ -69,10 +74,10 @@ def change_employee_status(
     db.commit()
     
     return {
-        "message": f"Employee status changed from {old_status} to {data.new_status}",
+        "message": f"Employee status changed from {old_status} to {final_status}",
         "employee_id": str(data.employee_id),
         "old_status": old_status,
-        "new_status": data.new_status,
+        "new_status": final_status,
         "reason": data.reason
     }
 
