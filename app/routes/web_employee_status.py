@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import BaseModel
@@ -35,19 +36,25 @@ def change_employee_status(
     
     old_status = employee.status
     
-    # Обновляем статус через сырой SQL (так как EmployeeView - это view)
+    # Обновляем статус через сырой SQL с text()
     try:
         db.execute(
-            f"UPDATE employees_view SET status = '{data.new_status}' WHERE id = '{data.employee_id}'"
+            text(f"UPDATE employees_view SET status = '{data.new_status}' WHERE id = '{data.employee_id}'")
         )
         db.commit()
+        print(f"✅ Статус обновлён: {old_status} → {data.new_status}")
     except Exception as e:
         db.rollback()
+        print(f"❌ Ошибка БД: {e}")
         raise HTTPException(status_code=500, detail=f"DB error: {str(e)}")
     
     # Создаём уведомление
-    title = "❌ Доступ заблокирован" if data.new_status == "inactive" else "✅ Доступ активирован"
-    body = f"Ваш доступ { 'заблокирован' if data.new_status == 'inactive' else 'восстановлен' }. Причина: {data.reason}"
+    if data.new_status == "inactive":
+        title = "❌ Доступ заблокирован"
+        body = f"Ваш доступ к системе заблокирован. Причина: {data.reason}"
+    else:
+        title = "✅ Доступ активирован"
+        body = f"Ваш доступ к системе восстановлен. Причина: {data.reason}"
     
     notification = Notification(
         id=uuid4(),
@@ -62,16 +69,24 @@ def change_employee_status(
     db.commit()
     
     return {
-        "message": f"Status changed: {old_status} → {data.new_status}",
+        "message": f"Employee status changed from {old_status} to {data.new_status}",
         "employee_id": str(data.employee_id),
         "old_status": old_status,
         "new_status": data.new_status,
         "reason": data.reason
     }
 
+
 @router.get("/positions")
 def get_all_positions(db: Session = Depends(get_db)):
-    """Список должностей (если понадобится)"""
+    """Список всех должностей для фильтрации"""
     from app.models.employee import PositionView
+    
     positions = db.query(PositionView.id, PositionView.title).order_by(PositionView.title).all()
-    return [{"id": str(p.id), "name": p.title} for p in positions]
+    return [
+        {
+            "id": str(p.id),
+            "name": p.title
+        }
+        for p in positions
+    ]
