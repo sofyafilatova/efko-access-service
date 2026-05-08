@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -12,20 +12,21 @@ router = APIRouter(prefix="/web/employee", tags=["Web - Employee Management"])
 
 class StatusUpdateRequest(BaseModel):
     employee_id: UUID
-    new_status: str  # "active" или "inactive"
+    new_status: str
     reason: str
     changed_by_user_id: UUID
 
-@router.patch("/status")
+@router.put("/status")
 def change_employee_status(
     data: StatusUpdateRequest,
     db: Session = Depends(get_db),
 ):
-    """Изменить статус сотрудника (активен/заблокирован) и отправить уведомление"""
+    """Изменить статус сотрудника (активен/заблокирован)"""
     
-    # Проверяем валидность статуса
+    print(f"🔧 Запрос на изменение статуса: {data.dict()}")
+    
     if data.new_status not in ["active", "inactive"]:
-        raise HTTPException(status_code=400, detail="Invalid status. Must be 'active' or 'inactive'")
+        raise HTTPException(status_code=400, detail="Invalid status")
     
     # Находим сотрудника
     employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
@@ -34,21 +35,22 @@ def change_employee_status(
     
     old_status = employee.status
     
-    # Обновляем статус (напрямую через update, т.к. EmployeeView может не поддерживать update)
-    db.execute(
-        f"UPDATE employees_view SET status = '{data.new_status}', updated_at = NOW() WHERE id = '{data.employee_id}'"
-    )
+    # Обновляем статус через сырой SQL (так как EmployeeView - это view)
+    try:
+        db.execute(
+            f"UPDATE employees_view SET status = '{data.new_status}' WHERE id = '{data.employee_id}'"
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB error: {str(e)}")
     
     # Создаём уведомление
-    if data.new_status == "inactive":
-        title = "❌ Доступ заблокирован"
-        body = f"Ваш доступ к системе заблокирован. Причина: {data.reason}"
-    else:
-        title = "✅ Доступ активирован"
-        body = f"Ваш доступ к системе восстановлен. Причина: {data.reason}"
+    title = "❌ Доступ заблокирован" if data.new_status == "inactive" else "✅ Доступ активирован"
+    body = f"Ваш доступ { 'заблокирован' if data.new_status == 'inactive' else 'восстановлен' }. Причина: {data.reason}"
     
     notification = Notification(
-        id=uuid.uuid4(),
+        id=uuid4(),
         employee_id=data.employee_id,
         title=title,
         body=body,
@@ -60,7 +62,7 @@ def change_employee_status(
     db.commit()
     
     return {
-        "message": f"Employee status changed from {old_status} to {data.new_status}",
+        "message": f"Status changed: {old_status} → {data.new_status}",
         "employee_id": str(data.employee_id),
         "old_status": old_status,
         "new_status": data.new_status,
@@ -68,17 +70,8 @@ def change_employee_status(
     }
 
 @router.get("/positions")
-def get_all_positions(
-    db: Session = Depends(get_db),
-):
-    """Получить список всех должностей для фильтрации"""
+def get_all_positions(db: Session = Depends(get_db)):
+    """Список должностей (если понадобится)"""
     from app.models.employee import PositionView
-    
     positions = db.query(PositionView.id, PositionView.title).order_by(PositionView.title).all()
-    return [
-        {
-            "id": str(p.id),
-            "name": p.title
-        }
-        for p in positions
-    ]
+    return [{"id": str(p.id), "name": p.title} for p in positions]
