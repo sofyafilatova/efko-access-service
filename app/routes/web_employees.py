@@ -9,7 +9,8 @@ router = APIRouter(prefix="/web/employees", tags=["Web - Employees"])
 def list_employees_full(
     search: str | None = Query(None),
     location_id: str | None = None,
-    status: str | None = "active",
+    position_id: str | None = None,
+    status: str | None = None,  # Изменено: теперь не по умолчанию "active"
     limit: int = Query(50, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -25,16 +26,20 @@ def list_employees_full(
         EmployeeView.status,
         EmployeeView.employment_type,
         PositionView.title.label("position_title"),
+        PositionView.id.label("position_id"),
         LocationView.name.label("location_name"),
         LocationView.city.label("location_city"),
     ).outerjoin(PositionView, EmployeeView.position_id == PositionView.id)\
      .outerjoin(WorkstationView, EmployeeView.workstation_id == WorkstationView.id)\
      .outerjoin(LocationView, WorkstationView.location_id == LocationView.id)
 
+    # Фильтры
     if status:
         q = q.filter(EmployeeView.status == status)
     if location_id:
         q = q.filter(LocationView.id == location_id)
+    if position_id:
+        q = q.filter(PositionView.id == position_id)
     if search:
         q = q.filter(
             EmployeeView.full_name.ilike(f"%{search}%") |
@@ -52,6 +57,7 @@ def list_employees_full(
                 "personnel_number": r.personnel_number,
                 "full_name": r.full_name,
                 "position": r.position_title or "—",
+                "position_id": str(r.position_id) if r.position_id else None,
                 "location": r.location_name or "—",
                 "city": r.location_city or "—",
                 "status": r.status,
