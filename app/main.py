@@ -20,8 +20,6 @@ from app.routes.web_employees import router as web_employees_router
 from app.routes.web_shifts import router as web_shifts_router
 from app.routes.access_rights import router as access_rights_router
 from app.routes import web_employees, web_shifts, web_employee_status
-
-# 👇 НОВЫЕ ИМПОРТЫ — добавляем сам роутер
 from app.routes.web_employee_status import router as web_employee_status_router
 from app.routes.web_notifications import router as web_notifications_router
 from app.routes.attendance_web import router as attendance_web_router
@@ -69,7 +67,7 @@ app.include_router(access_rights_router, prefix="/api")
 app.include_router(web_notifications_router, prefix="/api")
 app.include_router(attendance_web_router, prefix="/api")
 
-# 👇 НОВЫЕ ПОДКЛЮЧЕНИЯ (ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ)
+# 👇 НОВЫЕ ПОДКЛЮЧЕНИЯ
 app.include_router(web_employee_status_router, prefix="/api")
 
 @app.get("/health")
