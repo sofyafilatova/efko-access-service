@@ -7,8 +7,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.core.database import get_db
-from app.models.access import AccessRight
-from app.models.attendance import AttendanceRecord
+from app.models.access_rights import AccessRight  # проверь имя модели
+from app.models.attendance_record import AttendanceRecord
 from app.models.access_point import AccessPoint
 from app.models.zone import Zone
 from app.models.employee import EmployeeView
@@ -55,7 +55,7 @@ def check_access_and_log(
     attendance_record = AttendanceRecord(
         id=uuid4(),
         employee_id=data.employee_id,
-        shift_assignment_id=None,  # Пока не привязываем к смене
+        shift_assignment_id=None,
         access_point_id=data.access_point_id,
         event_at=datetime.utcnow(),
         event_type="granted" if is_allowed else "denied",
