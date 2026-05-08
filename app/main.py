@@ -16,9 +16,13 @@ from app.core.rabbitmq import close as rabbitmq_close
 from app.services.personnel_consumer import start_personnel_consumer
 from app.core.config import settings
 from app.routes.requests import router as requests_router
-from app.routes.web_employees import router as web_employees_router   # ← импорт
+from app.routes.web_employees import router as web_employees_router
 from app.routes.web_shifts import router as web_shifts_router
 from app.routes.access_rights import router as access_rights_router
+from app.routes import web_employees, web_shifts, web_employee_status
+
+# 👇 НОВЫЕ ИМПОРТЫ — добавляем сам роутер
+from app.routes.web_employee_status import router as web_employee_status_router
 
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
@@ -57,9 +61,12 @@ app.include_router(bookings_router, prefix="/api")
 app.include_router(guest_passes_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(requests_router, prefix="/api")
-app.include_router(web_employees_router, prefix="/api")   # ← подключение ПОСЛЕ создания app
+app.include_router(web_employees_router, prefix="/api")
 app.include_router(web_shifts_router, prefix="/api")
 app.include_router(access_rights_router, prefix="/api")
+
+# 👇 НОВЫЕ ПОДКЛЮЧЕНИЯ (ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ)
+app.include_router(web_employee_status_router, prefix="/api")
 
 @app.get("/health")
 async def health():
