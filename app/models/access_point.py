@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String, Boolean
 from sqlalchemy.dialects.postgresql import UUID
-from app.core.database import Base
+from app.models.base import Base
 import uuid
 
 class AccessPoint(Base):
