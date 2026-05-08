@@ -9,15 +9,12 @@ router = APIRouter(prefix="/web/employees", tags=["Web - Employees"])
 def list_employees_full(
     search: str | None = Query(None),
     location_id: str | None = None,
-    position_id: str | None = None,
-    status: str | None = None,  # Изменено: теперь не по умолчанию "active"
+    status: str | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Список сотрудников с JOIN-ами.
-    Логика: employees_view.workstation_id → workstations_view.id → workstations_view.location_id → locations_view.id
-    """
+    """Список сотрудников с JOIN-ами."""
     
     q = db.query(
         EmployeeView.id,
@@ -38,8 +35,6 @@ def list_employees_full(
         q = q.filter(EmployeeView.status == status)
     if location_id:
         q = q.filter(LocationView.id == location_id)
-    if position_id:
-        q = q.filter(PositionView.id == position_id)
     if search:
         q = q.filter(
             EmployeeView.full_name.ilike(f"%{search}%") |
