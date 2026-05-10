@@ -16,7 +16,7 @@ class ShiftAssignment(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     employee_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("employees_view.id"))
-    shift_template_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    shift_template_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("shift_templates.id"), nullable=True)
     shift_date: Mapped[date] = mapped_column(Date)
     planned_start: Mapped[datetime] = mapped_column(DateTime)
     planned_end: Mapped[datetime] = mapped_column(DateTime)
