@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text
 from uuid import UUID, uuid4
-from datetime import date, time, datetime
+from datetime import date, time, datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel
-
 
 from app.core.database import get_db
 from app.models.shift import ShiftAssignment
@@ -14,9 +13,7 @@ from app.models.shift_template import ShiftTemplate
 
 router = APIRouter(prefix="/web/schedules", tags=["Web - Schedules"])
 
-# =====================================================
-# 1. Получить все шаблоны смен
-# =====================================================
+
 @router.get("/templates")
 def get_shift_templates(
     db: Session = Depends(get_db),
@@ -36,14 +33,10 @@ def get_shift_templates(
     ]
 
 
-# =====================================================
-# 2. Статистика по персоналу (офис vs завод)
-# =====================================================
 @router.get("/staff-stats")
 def get_staff_stats(
     db: Session = Depends(get_db),
 ):
-    # Определяем офисные и заводские локации по типу/названию
     query = text("""
         SELECT 
             COUNT(CASE WHEN l.type = 'office' OR l.name ILIKE '%офис%' THEN 1 END) as office_count,
@@ -63,17 +56,13 @@ def get_staff_stats(
     }
 
 
-# =====================================================
-# 3. Статистика за неделю
-# =====================================================
 @router.get("/weekly-stats")
 def get_weekly_stats(
     start_date: date = Query(..., description="Понедельник недели (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
 ):
-    end_date = start_date + 7  # воскресенье
+    end_date = start_date + timedelta(days=7)
     
-    # Суммарные часы и количество смен
     query = text("""
         SELECT 
             SUM(EXTRACT(EPOCH FROM (planned_end - planned_start))/3600) as total_hours,
@@ -89,7 +78,7 @@ def get_weekly_stats(
     
     return {
         "start_date": start_date.isoformat(),
-        "end_date": (end_date - 1).isoformat(),
+        "end_date": (end_date - timedelta(days=1)).isoformat(),
         "total_hours": round(result[0] or 0, 1),
         "total_shifts": result[1] or 0,
         "day_shifts": result[2] or 0,
@@ -97,9 +86,6 @@ def get_weekly_stats(
     }
 
 
-# =====================================================
-# 4. Календарь смен для сотрудника
-# =====================================================
 @router.get("/employee-calendar")
 def get_employee_calendar(
     employee_id: UUID = Query(...),
@@ -107,12 +93,10 @@ def get_employee_calendar(
     month: int = Query(5),
     db: Session = Depends(get_db),
 ):
-    # Получаем информацию о сотруднике
     employee = db.query(EmployeeView).filter(EmployeeView.id == employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Получаем смены за месяц
     start_date = date(year, month, 1)
     if month == 12:
         end_date = date(year + 1, 1, 1)
@@ -125,7 +109,6 @@ def get_employee_calendar(
         ShiftAssignment.shift_date < end_date
     ).order_by(ShiftAssignment.shift_date).all()
     
-    # Формируем календарь
     calendar = []
     for day in range(1, 32):
         try:
@@ -159,9 +142,6 @@ def get_employee_calendar(
     }
 
 
-# =====================================================
-# 5. Добавить смену сотруднику
-# =====================================================
 class AddShiftRequest(BaseModel):
     employee_id: UUID
     shift_template_id: UUID
@@ -173,12 +153,10 @@ def add_shift_to_employee(
     data: AddShiftRequest,
     db: Session = Depends(get_db),
 ):
-    # Проверяем существование шаблона
     template = db.query(ShiftTemplate).filter(ShiftTemplate.id == data.shift_template_id).first()
     if not template:
         raise HTTPException(status_code=404, detail="Shift template not found")
     
-    # Проверяем, нет ли уже смены в этот день
     existing = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date == data.shift_date
@@ -187,7 +165,6 @@ def add_shift_to_employee(
     if existing:
         raise HTTPException(status_code=409, detail="Shift already exists for this employee on this date")
     
-    # Создаём новую смену
     new_shift = ShiftAssignment(
         id=uuid4(),
         employee_id=data.employee_id,
@@ -195,8 +172,7 @@ def add_shift_to_employee(
         shift_date=data.shift_date,
         planned_start=datetime.combine(data.shift_date, template.planned_start),
         planned_end=datetime.combine(data.shift_date, template.planned_end),
-        status="scheduled",
-        source_event_id=None
+        status="scheduled"
     )
     db.add(new_shift)
     db.commit()
@@ -213,9 +189,6 @@ def add_shift_to_employee(
     }
 
 
-# =====================================================
-# 6. Удалить смену
-# =====================================================
 @router.delete("/shift/{shift_id}")
 def delete_shift(
     shift_id: UUID,
@@ -231,9 +204,6 @@ def delete_shift(
     return {"message": "Shift deleted successfully"}
 
 
-# =====================================================
-# 7. Получить всех активных сотрудников для выбора
-# =====================================================
 @router.get("/employees")
 def get_active_employees(
     db: Session = Depends(get_db),
