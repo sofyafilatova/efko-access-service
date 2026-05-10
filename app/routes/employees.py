@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import text
 from uuid import UUID
 from datetime import date
 from typing import Optional
@@ -11,7 +12,7 @@ from app.core.security import (
 )
 from app.models.employee import (
     EmployeeView, EmployeeProfile, 
-    PositionView, DepartmentView, LocationView
+    PositionView, DepartmentView, LocationView, WorkstationView
 )
 from app.schemas.employee import EmployeeRead, EmployeeProfileUpdate
 
@@ -36,64 +37,72 @@ def get_my_profile(
 ):
     """Профиль текущего сотрудника с JOINs для мобилки."""
     
-    # Используем employee_id из токена, если есть
     lookup_id = user.employee_id or user.user_id
     
-    # Делаем запрос с JOINами напрямую (не через options)
-    emp = db.query(
-        EmployeeView.id,
-        EmployeeView.personnel_number,
-        EmployeeView.full_name,
-        EmployeeView.status,
-        EmployeeView.employment_type,
-        EmployeeView.hire_date,
-        EmployeeView.date_of_birth,
-        PositionView.title.label("position_title"),
-        DepartmentView.name.label("department_name"),
-        LocationView.name.label("location_name"),
-        LocationView.street_address.label("location_address"),
-        LocationView.city.label("location_city"),
-        EmployeeProfile.phone,
-        EmployeeProfile.last_name,
-        EmployeeProfile.first_name,
-        EmployeeProfile.patronymic,
-    ).outerjoin(
-        PositionView, EmployeeView.position_id == PositionView.id
-    ).outerjoin(
-        DepartmentView, EmployeeView.department_id == DepartmentView.id
-    ).outerjoin(
-        LocationView, EmployeeView.location_id == LocationView.id
-    ).outerjoin(
-        EmployeeProfile, EmployeeView.id == EmployeeProfile.employee_id
-    ).filter(
-        EmployeeView.id == lookup_id
-    ).first()
-
-    if not emp:
+    # Получаем локацию через прямой SQL (чтобы использовать COALESCE)
+    query = text("""
+        SELECT 
+            e.id,
+            e.personnel_number,
+            e.full_name,
+            e.status,
+            e.employment_type,
+            e.hire_date,
+            e.date_of_birth,
+            p.title as position_title,
+            d.name as department_name,
+            COALESCE(l.name, wl.name) as location_name,
+            COALESCE(l.street_address, wl.street_address) as location_address,
+            COALESCE(l.city, wl.city) as location_city,
+            ep.phone,
+            ep.last_name,
+            ep.first_name,
+            ep.patronymic
+        FROM employees_view e
+        LEFT JOIN positions_view p ON e.position_id = p.id
+        LEFT JOIN departments_view d ON e.department_id = d.id
+        LEFT JOIN locations_view l ON e.location_id = l.id
+        LEFT JOIN workstations_view w ON e.workstation_id = w.id
+        LEFT JOIN locations_view wl ON w.location_id = wl.id
+        LEFT JOIN employee_profiles ep ON e.id = ep.employee_id
+        WHERE e.id = :employee_id
+    """)
+    
+    result = db.execute(query, {"employee_id": lookup_id}).fetchone()
+    
+    if not result:
         raise HTTPException(status_code=404, detail="Employee profile not found")
-
+    
+    # Распаковываем результат
+    (
+        emp_id, personnel_number, full_name, status, employment_type,
+        hire_date, date_of_birth, position_title, department_name,
+        location_name, location_address, location_city,
+        phone, last_name, first_name, patronymic
+    ) = result
+    
     return {
-        "id": str(emp.id),
-        "personnel_number": emp.personnel_number,
-        "full_name": emp.full_name,
-        "first_name": emp.first_name,
-        "last_name": emp.last_name,
-        "patronymic": emp.patronymic,
-        "phone": emp.phone,
-        "status": emp.status,
-        "employment_type": emp.employment_type,
-        "hire_date": emp.hire_date.isoformat() if emp.hire_date else None,
-        "date_of_birth": emp.date_of_birth.isoformat() if emp.date_of_birth else None,
+        "id": str(emp_id),
+        "personnel_number": personnel_number,
+        "full_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "patronymic": patronymic,
+        "phone": phone,
+        "status": status,
+        "employment_type": employment_type,
+        "hire_date": hire_date.isoformat() if hire_date else None,
+        "date_of_birth": date_of_birth.isoformat() if date_of_birth else None,
         "position": {
-            "title": emp.position_title or "—"
+            "title": position_title or "—"
         },
         "department": {
-            "name": emp.department_name or "—"
+            "name": department_name or "—"
         },
         "location": {
-            "name": emp.location_name or "—",
-            "address": emp.location_address or "—",
-            "city": emp.location_city or "—"
+            "name": location_name or "—",
+            "address": location_address or "—",
+            "city": location_city or "—"
         }
     }
 
