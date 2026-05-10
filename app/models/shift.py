@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
+
 class ShiftAssignment(Base):
     __tablename__ = "shift_assignments"
 

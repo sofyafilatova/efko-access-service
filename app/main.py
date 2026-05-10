@@ -26,6 +26,7 @@ from app.routes.attendance_web import router as attendance_web_router
 from app.routes.web_bookings import router as web_bookings_router
 from app.routes.web_schedules import router as web_schedules_router
 
+
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
 
 logging.basicConfig(level=logging.INFO)

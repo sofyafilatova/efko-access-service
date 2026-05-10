@@ -6,6 +6,7 @@ from datetime import date, time, datetime
 from typing import Optional
 from pydantic import BaseModel
 
+
 from app.core.database import get_db
 from app.models.shift import ShiftAssignment
 from app.models.employee import EmployeeView

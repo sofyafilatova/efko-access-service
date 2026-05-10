@@ -4,6 +4,7 @@ from datetime import datetime
 import uuid
 from app.models.base import Base
 
+
 class ShiftTemplate(Base):
     __tablename__ = "shift_templates"
     
