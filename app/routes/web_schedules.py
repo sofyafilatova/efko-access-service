@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.models.shift import ShiftAssignment
 from app.models.employee import EmployeeView
 from app.models.shift_template import ShiftTemplate
+from app.models.notification import Notification
 
 router = APIRouter(prefix="/web/schedules", tags=["Web - Schedules"])
 
@@ -65,14 +66,13 @@ def get_weekly_stats(
     
     query = text("""
         SELECT 
-            SUM(EXTRACT(EPOCH FROM (planned_end - planned_start))/3600) as total_hours,
+            COALESCE(SUM(EXTRACT(EPOCH FROM (planned_end - planned_start))/3600), 0) as total_hours,
             COUNT(*) as total_shifts,
             COUNT(CASE WHEN EXTRACT(HOUR FROM planned_start) BETWEEN 6 AND 17 THEN 1 END) as day_shifts,
             COUNT(CASE WHEN EXTRACT(HOUR FROM planned_start) >= 18 
                         OR EXTRACT(HOUR FROM planned_start) < 6 THEN 1 END) as night_shifts
         FROM shift_assignments
         WHERE shift_date >= :start_date AND shift_date < :end_date
-          AND status IN ('completed', 'in_progress', 'scheduled')
     """)
     result = db.execute(query, {"start_date": start_date, "end_date": end_date}).fetchone()
     
@@ -146,6 +146,7 @@ class AddShiftRequest(BaseModel):
     employee_id: UUID
     shift_template_id: UUID
     shift_date: date
+    comment: Optional[str] = None
 
 
 @router.post("/add-shift")
@@ -156,6 +157,11 @@ def add_shift_to_employee(
     template = db.query(ShiftTemplate).filter(ShiftTemplate.id == data.shift_template_id).first()
     if not template:
         raise HTTPException(status_code=404, detail="Shift template not found")
+    
+    # Получаем информацию о сотруднике
+    employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
     
     existing = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
@@ -175,6 +181,23 @@ def add_shift_to_employee(
         status="scheduled"
     )
     db.add(new_shift)
+    
+    # Создаём уведомление
+    notification_body = f"Вам добавлена смена: {template.name} ({template.planned_start.strftime('%H:%M')} — {template.planned_end.strftime('%H:%M')}) на {data.shift_date}"
+    if data.comment:
+        notification_body += f"\nКомментарий: {data.comment}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=data.employee_id,
+        title="📅 Новая смена",
+        body=notification_body,
+        category="schedule_change",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    
     db.commit()
     db.refresh(new_shift)
     
@@ -189,16 +212,46 @@ def add_shift_to_employee(
     }
 
 
+class DeleteShiftRequest(BaseModel):
+    reason: Optional[str] = None
+
+
 @router.delete("/shift/{shift_id}")
 def delete_shift(
     shift_id: UUID,
+    reason: Optional[str] = Query(None, description="Причина удаления"),
     db: Session = Depends(get_db),
 ):
     shift = db.query(ShiftAssignment).filter(ShiftAssignment.id == shift_id).first()
     if not shift:
         raise HTTPException(status_code=404, detail="Shift not found")
     
+    # Получаем информацию о сотруднике
+    employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
+    
+    # Сохраняем дату для уведомления
+    shift_date = shift.shift_date
+    
+    # Удаляем смену
     db.delete(shift)
+    
+    # Создаём уведомление
+    if employee:
+        notification_body = f"Смена на {shift_date} отменена"
+        if reason:
+            notification_body += f"\nПричина: {reason}"
+        
+        notification = Notification(
+            id=uuid4(),
+            employee_id=shift.employee_id,
+            title="❌ Смена отменена",
+            body=notification_body,
+            category="schedule_change",
+            is_read=False,
+            created_at=datetime.utcnow()
+        )
+        db.add(notification)
+    
     db.commit()
     
     return {"message": "Shift deleted successfully"}
