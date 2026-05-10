@@ -40,6 +40,9 @@ def list_employees_full(
             EmployeeView.full_name.ilike(f"%{search}%") |
             EmployeeView.personnel_number.ilike(f"%{search}%")
         )
+    
+    # СОРТИРОВКА - ДОБАВЬ ЭТУ СТРОЧКУ
+    q = q.order_by(EmployeeView.full_name)
 
     total = q.count()
     rows = q.offset(offset).limit(limit).all()
