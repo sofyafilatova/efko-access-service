@@ -381,3 +381,86 @@ def send_vacation_notification(
         "message": "Vacation notification sent successfully",
         "vacation_days": vacation_days
     }
+
+
+class SickLeaveRequest(BaseModel):
+    employee_id: UUID
+    start_date: date
+    end_date: date
+    reason: Optional[str] = None
+
+
+@router.post("/send-sick-leave")
+def send_sick_leave_notification(
+    data: SickLeaveRequest,
+    db: Session = Depends(get_db),
+):
+    employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    if data.start_date > data.end_date:
+        raise HTTPException(status_code=400, detail="Start date must be before end date")
+    
+    # Удаляем существующие смены в этот период
+    db.query(ShiftAssignment).filter(
+        ShiftAssignment.employee_id == data.employee_id,
+        ShiftAssignment.shift_date >= data.start_date,
+        ShiftAssignment.shift_date <= data.end_date
+    ).delete()
+    
+    # Получаем или создаём шаблон для больничного
+    sick_template = db.query(ShiftTemplate).filter(ShiftTemplate.code == 'SICK_LEAVE').first()
+    if not sick_template:
+        sick_template = ShiftTemplate(
+            id=uuid4(),
+            name="Больничный",
+            code="SICK_LEAVE",
+            planned_start=datetime.strptime("00:00", "%H:%M").time(),
+            planned_end=datetime.strptime("00:00", "%H:%M").time(),
+            work_days_pattern="0000000",
+            is_active=True
+        )
+        db.add(sick_template)
+        db.commit()
+        db.refresh(sick_template)
+    
+    # Создаём записи о больничном для каждого дня
+    current_date = data.start_date
+    sick_days = 0
+    while current_date <= data.end_date:
+        sick_shift = ShiftAssignment(
+            id=uuid4(),
+            employee_id=data.employee_id,
+            shift_template_id=sick_template.id,
+            shift_date=current_date,
+            planned_start=datetime.combine(current_date, sick_template.planned_start),
+            planned_end=datetime.combine(current_date, sick_template.planned_end),
+            status="sick_leave"
+        )
+        db.add(sick_shift)
+        sick_days += 1
+        current_date += timedelta(days=1)
+    
+    # Создаём уведомление
+    notification_body = f"Оформлен больничный с {data.start_date} по {data.end_date}"
+    if data.reason:
+        notification_body += f"\nКомментарий: {data.reason}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=data.employee_id,
+        title="🩺 Больничный оформлен",
+        body=notification_body,
+        category="sick_leave",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    
+    db.commit()
+    
+    return {
+        "message": "Sick leave notification sent successfully",
+        "sick_days": sick_days
+    }
