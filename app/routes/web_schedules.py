@@ -270,3 +270,79 @@ def get_active_employees(
         }
         for e in employees
     ]
+
+
+@router.get("/shift-details/{shift_id}")
+def get_shift_details(
+    shift_id: UUID,
+    db: Session = Depends(get_db),
+):
+    shift = db.query(ShiftAssignment).filter(ShiftAssignment.id == shift_id).first()
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    
+    employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
+    template = db.query(ShiftTemplate).filter(ShiftTemplate.id == shift.shift_template_id).first() if shift.shift_template_id else None
+    
+    # Получаем связанные уведомления (если есть)
+    notifications = db.query(Notification).filter(
+        Notification.employee_id == shift.employee_id,
+        Notification.category == "schedule_change"
+    ).order_by(Notification.created_at.desc()).limit(5).all()
+    
+    return {
+        "shift_id": str(shift.id),
+        "employee_id": str(shift.employee_id),
+        "employee_name": employee.full_name if employee else "Неизвестно",
+        "shift_date": shift.shift_date.isoformat(),
+        "planned_start": shift.planned_start.strftime("%H:%M"),
+        "planned_end": shift.planned_end.strftime("%H:%M"),
+        "status": shift.status,
+        "shift_template_id": str(shift.shift_template_id) if shift.shift_template_id else None,
+        "shift_template_name": template.name if template else "Индивидуальная",
+        "recent_notifications": [
+            {
+                "id": str(n.id),
+                "title": n.title,
+                "body": n.body,
+                "created_at": n.created_at.isoformat() if n.created_at else None
+            }
+            for n in notifications
+        ]
+    } 
+
+class VacationRequest(BaseModel):
+    employee_id: UUID
+    start_date: date
+    end_date: date
+    reason: Optional[str] = None
+
+
+@router.post("/send-vacation")
+def send_vacation_notification(
+    data: VacationRequest,
+    db: Session = Depends(get_db),
+):
+    employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    # Формируем уведомление
+    notification_body = f"Оформлен отпуск с {data.start_date} по {data.end_date}"
+    if data.reason:
+        notification_body += f"\nКомментарий: {data.reason}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=data.employee_id,
+        title="🏖️ Отпуск оформлен",
+        body=notification_body,
+        category="vacation",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    
+    db.commit()
+    
+    return {"message": "Vacation notification sent successfully"}
