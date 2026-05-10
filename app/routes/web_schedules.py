@@ -158,7 +158,6 @@ def add_shift_to_employee(
     if not template:
         raise HTTPException(status_code=404, detail="Shift template not found")
     
-    # Получаем информацию о сотруднике
     employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -182,7 +181,6 @@ def add_shift_to_employee(
     )
     db.add(new_shift)
     
-    # Создаём уведомление
     notification_body = f"Вам добавлена смена: {template.name} ({template.planned_start.strftime('%H:%M')} — {template.planned_end.strftime('%H:%M')}) на {data.shift_date}"
     if data.comment:
         notification_body += f"\nКомментарий: {data.comment}"
@@ -212,10 +210,6 @@ def add_shift_to_employee(
     }
 
 
-class DeleteShiftRequest(BaseModel):
-    reason: Optional[str] = None
-
-
 @router.delete("/shift/{shift_id}")
 def delete_shift(
     shift_id: UUID,
@@ -226,16 +220,11 @@ def delete_shift(
     if not shift:
         raise HTTPException(status_code=404, detail="Shift not found")
     
-    # Получаем информацию о сотруднике
     employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
-    
-    # Сохраняем дату для уведомления
     shift_date = shift.shift_date
     
-    # Удаляем смену
     db.delete(shift)
     
-    # Создаём уведомление
     if employee:
         notification_body = f"Смена на {shift_date} отменена"
         if reason:
@@ -284,7 +273,6 @@ def get_shift_details(
     employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
     template = db.query(ShiftTemplate).filter(ShiftTemplate.id == shift.shift_template_id).first() if shift.shift_template_id else None
     
-    # Получаем связанные уведомления (если есть)
     notifications = db.query(Notification).filter(
         Notification.employee_id == shift.employee_id,
         Notification.category == "schedule_change"
@@ -311,6 +299,7 @@ def get_shift_details(
         ]
     } 
 
+
 class VacationRequest(BaseModel):
     employee_id: UUID
     start_date: date
@@ -327,7 +316,50 @@ def send_vacation_notification(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Формируем уведомление
+    if data.start_date > data.end_date:
+        raise HTTPException(status_code=400, detail="Start date must be before end date")
+    
+    # Удаляем существующие смены в этот период
+    db.query(ShiftAssignment).filter(
+        ShiftAssignment.employee_id == data.employee_id,
+        ShiftAssignment.shift_date >= data.start_date,
+        ShiftAssignment.shift_date <= data.end_date
+    ).delete()
+    
+    # Получаем или создаём шаблон для отпуска
+    vacation_template = db.query(ShiftTemplate).filter(ShiftTemplate.code == 'VACATION').first()
+    if not vacation_template:
+        vacation_template = ShiftTemplate(
+            id=uuid4(),
+            name="Отпуск",
+            code="VACATION",
+            planned_start=datetime.strptime("00:00", "%H:%M").time(),
+            planned_end=datetime.strptime("00:00", "%H:%M").time(),
+            work_days_pattern="0000000",
+            is_active=True
+        )
+        db.add(vacation_template)
+        db.commit()
+        db.refresh(vacation_template)
+    
+    # Создаём записи об отпуске для каждого дня
+    current_date = data.start_date
+    vacation_days = 0
+    while current_date <= data.end_date:
+        vacation_shift = ShiftAssignment(
+            id=uuid4(),
+            employee_id=data.employee_id,
+            shift_template_id=vacation_template.id,
+            shift_date=current_date,
+            planned_start=datetime.combine(current_date, vacation_template.planned_start),
+            planned_end=datetime.combine(current_date, vacation_template.planned_end),
+            status="vacation"
+        )
+        db.add(vacation_shift)
+        vacation_days += 1
+        current_date += timedelta(days=1)
+    
+    # Создаём уведомление
     notification_body = f"Оформлен отпуск с {data.start_date} по {data.end_date}"
     if data.reason:
         notification_body += f"\nКомментарий: {data.reason}"
@@ -345,4 +377,7 @@ def send_vacation_notification(
     
     db.commit()
     
-    return {"message": "Vacation notification sent successfully"}
+    return {
+        "message": "Vacation notification sent successfully",
+        "vacation_days": vacation_days
+    }
