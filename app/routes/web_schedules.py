@@ -15,23 +15,6 @@ from app.models.notification import Notification
 router = APIRouter(prefix="/web/schedules", tags=["Web - Schedules"])
 
 
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: конвертация локальной даты (MSK) в UTC
-def local_date_to_utc_range(local_date: date) -> tuple[datetime, datetime]:
-    """
-    Преобразует локальную дату (по московскому времени) в интервал UTC.
-    Возвращает (start_of_day_utc, end_of_day_utc) для фильтрации.
-    """
-    # Московское время UTC+3
-    start_local = datetime(local_date.year, local_date.month, local_date.day, 0, 0, 0)
-    end_local = datetime(local_date.year, local_date.month, local_date.day, 23, 59, 59)
-    
-    # Вычитаем 3 часа для перевода в UTC
-    start_utc = start_local - timedelta(hours=3)
-    end_utc = end_local - timedelta(hours=3)
-    
-    return start_utc, end_utc
-
-
 @router.get("/templates")
 def get_shift_templates(
     db: Session = Depends(get_db),
@@ -179,7 +162,7 @@ def add_shift_to_employee(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Проверка существующей смены по ДАТЕ (локальной, без времени)
+    # Проверка существующей смены по ДАТЕ
     existing = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date == data.shift_date
@@ -188,24 +171,18 @@ def add_shift_to_employee(
     if existing:
         raise HTTPException(status_code=409, detail="Shift already exists for this employee on this date")
     
-    # ВАЖНО: planned_start и planned_end хранятся в UTC
-    # Поэтому для московской даты вычитаем 3 часа
-    start_datetime = datetime(data.shift_date.year, data.shift_date.month, data.shift_date.day, 
-                             template.planned_start.hour, template.planned_start.minute)
-    end_datetime = datetime(data.shift_date.year, data.shift_date.month, data.shift_date.day,
-                           template.planned_end.hour, template.planned_end.minute)
-    
-    # Переводим в UTC (вычитаем 3 часа)
-    start_utc = start_datetime - timedelta(hours=3)
-    end_utc = end_datetime - timedelta(hours=3)
+    # СОХРАНЯЕМ В ЛОКАЛЬНОМ ВРЕМЕНИ (МОСКВА)
+    # planned_start и planned_end хранятся в МОСКОВСКОМ времени
+    start_datetime = datetime.combine(data.shift_date, template.planned_start)
+    end_datetime = datetime.combine(data.shift_date, template.planned_end)
     
     new_shift = ShiftAssignment(
         id=uuid4(),
         employee_id=data.employee_id,
         shift_template_id=data.shift_template_id,
-        shift_date=data.shift_date,  # ← храним ЛОКАЛЬНУЮ дату для фильтрации
-        planned_start=start_utc,
-        planned_end=end_utc,
+        shift_date=data.shift_date,
+        planned_start=start_datetime,  # ← теперь в локальном времени
+        planned_end=end_datetime,      # ← теперь в локальном времени
         status="scheduled"
     )
     db.add(new_shift)
@@ -233,8 +210,8 @@ def add_shift_to_employee(
         "shift_id": str(new_shift.id),
         "employee_id": str(data.employee_id),
         "shift_date": data.shift_date.isoformat(),
-        "planned_start": new_shift.planned_start.isoformat(),
-        "planned_end": new_shift.planned_end.isoformat(),
+        "planned_start": new_shift.planned_start.strftime("%H:%M"),
+        "planned_end": new_shift.planned_end.strftime("%H:%M"),
         "status": new_shift.status
     }
 
@@ -250,7 +227,7 @@ def delete_shift(
         raise HTTPException(status_code=404, detail="Shift not found")
     
     employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
-    shift_date = shift.shift_date  # ← это ЛОКАЛЬНАЯ дата
+    shift_date = shift.shift_date
     
     db.delete(shift)
     
@@ -307,20 +284,13 @@ def get_shift_details(
         Notification.category == "schedule_change"
     ).order_by(Notification.created_at.desc()).limit(5).all()
     
-    # Для отображения времени в вебе — конвертируем UTC в MSK
-    def utc_to_msk_str(dt: datetime) -> str:
-        if dt is None:
-            return ""
-        msk_dt = dt + timedelta(hours=3)
-        return msk_dt.strftime("%H:%M")
-    
     return {
         "shift_id": str(shift.id),
         "employee_id": str(shift.employee_id),
         "employee_name": employee.full_name if employee else "Неизвестно",
         "shift_date": shift.shift_date.isoformat(),
-        "planned_start": utc_to_msk_str(shift.planned_start),
-        "planned_end": utc_to_msk_str(shift.planned_end),
+        "planned_start": shift.planned_start.strftime("%H:%M"),
+        "planned_end": shift.planned_end.strftime("%H:%M"),
         "status": shift.status,
         "shift_template_id": str(shift.shift_template_id) if shift.shift_template_id else None,
         "shift_template_name": template.name if template else "Индивидуальная",
@@ -355,7 +325,7 @@ def send_vacation_notification(
     if data.start_date > data.end_date:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
-    # Удаляем существующие смены в этот период по ЛОКАЛЬНОЙ дате
+    # Удаляем существующие смены в этот период
     db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date >= data.start_date,
@@ -378,7 +348,7 @@ def send_vacation_notification(
         db.commit()
         db.refresh(vacation_template)
     
-    # Создаём записи об отпуске для каждого дня (храним ЛОКАЛЬНУЮ дату)
+    # Создаём записи об отпуске (в локальном времени)
     current_date = data.start_date
     vacation_days = 0
     while current_date <= data.end_date:
@@ -387,8 +357,8 @@ def send_vacation_notification(
             employee_id=data.employee_id,
             shift_template_id=vacation_template.id,
             shift_date=current_date,
-            planned_start=datetime.combine(current_date, vacation_template.planned_start) - timedelta(hours=3),
-            planned_end=datetime.combine(current_date, vacation_template.planned_end) - timedelta(hours=3),
+            planned_start=datetime.combine(current_date, vacation_template.planned_start),
+            planned_end=datetime.combine(current_date, vacation_template.planned_end),
             status="vacation"
         )
         db.add(vacation_shift)
@@ -438,7 +408,7 @@ def send_sick_leave_notification(
     if data.start_date > data.end_date:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
-    # Удаляем существующие смены в этот период по ЛОКАЛЬНОЙ дате
+    # Удаляем существующие смены в этот период
     db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date >= data.start_date,
@@ -461,7 +431,7 @@ def send_sick_leave_notification(
         db.commit()
         db.refresh(sick_template)
     
-    # Создаём записи о больничном для каждого дня (храним ЛОКАЛЬНУЮ дату)
+    # Создаём записи о больничном (в локальном времени)
     current_date = data.start_date
     sick_days = 0
     while current_date <= data.end_date:
@@ -470,8 +440,8 @@ def send_sick_leave_notification(
             employee_id=data.employee_id,
             shift_template_id=sick_template.id,
             shift_date=current_date,
-            planned_start=datetime.combine(current_date, sick_template.planned_start) - timedelta(hours=3),
-            planned_end=datetime.combine(current_date, sick_template.planned_end) - timedelta(hours=3),
+            planned_start=datetime.combine(current_date, sick_template.planned_start),
+            planned_end=datetime.combine(current_date, sick_template.planned_end),
             status="sick_leave"
         )
         db.add(sick_shift)
