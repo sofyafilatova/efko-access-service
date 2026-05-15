@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID, uuid4
 from datetime import datetime
+import json
 
 from app.core.database import get_db
 from app.core.security import AnyEmployee, ShiftManagerPlus, CurrentUser
@@ -23,7 +24,6 @@ def create_request(
     if data.type not in VALID_TYPES:
         raise HTTPException(400, detail=f"Invalid type. Must be one of: {VALID_TYPES}")
 
-    # ИСПРАВЛЕНИЕ: используем employee_id из токена
     lookup_id = user.employee_id or user.user_id
 
     req = Request(
@@ -38,6 +38,7 @@ def create_request(
     db.commit()
     db.refresh(req)
     return req
+
 
 @router.get("/my", response_model=list[RequestRead])
 def my_requests(
@@ -100,12 +101,14 @@ def approve_request(
     db.commit()
     db.refresh(req)
 
-    # Уведомляем сотрудника
+    # Формируем понятное уведомление в зависимости от payload
+    notification_body = _format_notification_body(req.type, req.payload, data.admin_comment)
+
     create_notification(
         db,
         employee_id=req.employee_id,
-        title="Запрос одобрен",
-        body=f"Ваш запрос «{req.type}» был одобрен.",
+        title="✅ Запрос одобрен",
+        body=notification_body,
         category="request",
     )
 
@@ -135,12 +138,57 @@ def reject_request(
     create_notification(
         db,
         employee_id=req.employee_id,
-        title="Запрос отклонён",
-        body=f"Ваш запрос «{req.type}» отклонён. Причина: {data.admin_comment}",
+        title="❌ Запрос отклонён",
+        body=f"Ваш запрос отклонён. Причина: {data.admin_comment}",
         category="request",
     )
 
     return req
+
+
+def _format_notification_body(req_type: str, payload: dict, admin_comment: str) -> str:
+    """Формирует понятное тело уведомления в зависимости от типа и содержимого запроса"""
+    
+    if req_type == "shift_change":
+        # Проверяем, есть ли в payload признаки разных типов запросов
+        if payload.get("office_name"):
+            # Запрос на работу из офиса
+            return f"Одобрен запрос на работу из офиса «{payload.get('office_name')}».\nАдрес: {payload.get('office_address', '—')}\nКомментарий HR: {admin_comment}"
+        
+        elif payload.get("requested_date") and payload.get("reason", "").lower().find("отгул") != -1:
+            # Запрос на отгул
+            return f"Одобрен отгул на {payload.get('requested_date')}.\nПричина: {payload.get('reason')}\nКомментарий HR: {admin_comment}"
+        
+        elif payload.get("requested_date"):
+            # Запрос на изменение графика (конкретная дата)
+            return f"Одобрено изменение графика: смена на {payload.get('requested_date')}.\nПричина: {payload.get('reason', '—')}\nКомментарий HR: {admin_comment}"
+        
+        elif payload.get("shift_id"):
+            # Запрос на перерыв
+            return f"Одобрен перерыв в смене.\nКомментарий HR: {admin_comment}"
+        
+        else:
+            # Общий случай
+            return f"Одобрен запрос на изменение графика.\nПричина: {payload.get('reason', '—')}\nКомментарий HR: {admin_comment}"
+    
+    elif req_type == "profile_change":
+        changes = []
+        if payload.get("phone"):
+            changes.append(f"телефон: {payload.get('phone')}")
+        if payload.get("email"):
+            changes.append(f"email: {payload.get('email')}")
+        if payload.get("reason"):
+            changes.append(f"причина: {payload.get('reason')}")
+        return f"Изменение профиля одобрено.\n{', '.join(changes)}"
+    
+    elif req_type == "extend_shift":
+        return f"Одобрено продление смены.\nКомментарий HR: {admin_comment}"
+    
+    elif req_type == "additional_access":
+        return f"Одобрен запрос на дополнительный доступ к зоне: {payload.get('zone_name', '—')}\nКомментарий HR: {admin_comment}"
+    
+    else:
+        return f"Ваш запрос «{req_type}» был одобрен.\nКомментарий HR: {admin_comment}"
 
 
 def _apply_profile_change(db: Session, employee_id: UUID, payload: dict):
