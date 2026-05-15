@@ -11,7 +11,6 @@ from app.models.shift import ShiftAssignment
 from app.models.employee import EmployeeView
 from app.models.shift_template import ShiftTemplate
 from app.models.notification import Notification
-from app.models.location import LocationView
 
 router = APIRouter(prefix="/web/schedules", tags=["Web - Schedules"])
 
@@ -654,16 +653,24 @@ def auto_assign_shifts(
     # Получаем всех активных сотрудников
     employees = db.query(EmployeeView).filter(EmployeeView.status == 'active').all()
     
-    # Определяем тип сотрудника (офис/завод) по локации
+    # Определяем тип сотрудника (офис/завод) через SQL запрос
     office_employees = []
     factory_employees = []
     
     for emp in employees:
+        # Определяем по location через workstation
         is_office = False
-        if emp.location_id:
-            loc = db.query(LocationView).filter(LocationView.id == emp.location_id).first()
-            if loc and loc.type == 'office':
+        if emp.workstation_id:
+            query = text("""
+                SELECT l.type 
+                FROM workstations_view w
+                LEFT JOIN locations_view l ON w.location_id = l.id
+                WHERE w.id = :workstation_id
+            """)
+            result = db.execute(query, {"workstation_id": emp.workstation_id}).fetchone()
+            if result and result[0] == 'office':
                 is_office = True
+        
         if is_office:
             office_employees.append(emp)
         else:
@@ -707,7 +714,7 @@ def generate_office_shifts(employee: EmployeeView, year: int, month: int, templa
     
     current_date = start_date
     while current_date < end_date:
-        if current_date.weekday() < 5:
+        if current_date.weekday() < 5:  # пн-пт
             shifts.append({
                 "shift_date": current_date,
                 "planned_start": datetime.combine(current_date, office_template.planned_start),
@@ -740,32 +747,32 @@ def generate_factory_shifts(employee: EmployeeView, year: int, month: int, templ
     if not factory_templates:
         return shifts
     
-    rotation_start = hash(employee.id) % len(factory_templates)
+    # Используем hash от employee_id для равномерного распределения
+    rotation_start = abs(hash(employee.id)) % len(factory_templates)
     
     current_date = start_date
     day_counter = 0
     shift_cycle = 0
     
     while current_date < end_date:
-        is_work_day = (day_counter % 4) < 2
+        is_work_day = (day_counter % 4) < 2  # 2 дня работы, 2 дня отдыха
         
         if is_work_day:
             template_index = (rotation_start + shift_cycle) % len(factory_templates)
             template = factory_templates[template_index]
             
             current_start = datetime.combine(current_date, template.planned_start)
-            if shifts:
-                last_shift = shifts[-1]
-                last_end = last_shift["planned_end"]
-                hours_diff = (current_start - last_end).total_seconds() / 3600
-                if hours_diff < 12:
-                    current_start = last_end + timedelta(hours=12)
+            
+            # Проверка на ночную смену (переход через полночь)
+            if template.planned_end >= template.planned_start:
+                current_end = datetime.combine(current_date, template.planned_end)
+            else:
+                current_end = datetime.combine(current_date + timedelta(days=1), template.planned_end)
             
             shifts.append({
                 "shift_date": current_date,
                 "planned_start": current_start,
-                "planned_end": datetime.combine(current_date, template.planned_end) if template.planned_end >= template.planned_start 
-                              else datetime.combine(current_date + timedelta(days=1), template.planned_end),
+                "planned_end": current_end,
                 "shift_template_id": template.id,
                 "status": "scheduled"
             })
