@@ -545,3 +545,111 @@ def send_day_off_notification(
         "message": "Day off notification sent successfully",
         "date": data.date.isoformat()
     }
+
+
+class MarkMissedRequest(BaseModel):
+    shift_id: UUID
+    reason: Optional[str] = None
+
+
+@router.post("/mark-missed")
+def mark_shift_as_missed(
+    data: MarkMissedRequest,
+    db: Session = Depends(get_db),
+):
+    """Отметить смену как прогул"""
+    
+    shift = db.query(ShiftAssignment).filter(ShiftAssignment.id == data.shift_id).first()
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    
+    # Получаем информацию о сотруднике
+    employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    # Сохраняем старый статус
+    old_status = shift.status
+    
+    # Обновляем статус на missed
+    shift.status = "missed"
+    db.commit()
+    
+    # Создаём уведомление
+    notification_body = f"Смена на {shift.shift_date} отмечена как прогул"
+    if data.reason:
+        notification_body += f"\nПричина: {data.reason}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=shift.employee_id,
+        title="⚠️ Смена отмечена как прогул",
+        body=notification_body,
+        category="schedule_change",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    db.commit()
+    
+    return {
+        "message": f"Shift marked as missed (was: {old_status})",
+        "shift_id": str(shift.id),
+        "shift_date": shift.shift_date.isoformat(),
+        "status": shift.status
+    }
+
+
+class RemindShiftRequest(BaseModel):
+    shift_id: UUID
+    comment: Optional[str] = None
+
+
+@router.post("/remind-shift")
+def remind_about_shift(
+    data: RemindShiftRequest,
+    db: Session = Depends(get_db),
+):
+    """Отправить напоминание о смене сотруднику"""
+    
+    shift = db.query(ShiftAssignment).filter(ShiftAssignment.id == data.shift_id).first()
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    
+    # Получаем информацию о сотруднике
+    employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    # Получаем шаблон смены (если есть)
+    template = db.query(ShiftTemplate).filter(ShiftTemplate.id == shift.shift_template_id).first()
+    
+    # Формируем время
+    if template:
+        time_str = f"{template.planned_start.strftime('%H:%M')} — {template.planned_end.strftime('%H:%M')}"
+    else:
+        time_str = f"{shift.planned_start.strftime('%H:%M')} — {shift.planned_end.strftime('%H:%M')}"
+    
+    # Создаём уведомление
+    notification_body = f"Напоминание: у вас запланирована смена на {shift.shift_date} ({time_str})"
+    if data.comment:
+        notification_body += f"\nКомментарий: {data.comment}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=shift.employee_id,
+        title="🔔 Напоминание о смене",
+        body=notification_body,
+        category="reminder",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    db.commit()
+    
+    return {
+        "message": "Reminder sent successfully",
+        "shift_id": str(shift.id),
+        "employee_id": str(shift.employee_id),
+        "shift_date": shift.shift_date.isoformat()
+    }
