@@ -164,8 +164,10 @@ def _format_notification_body(req_type: str, payload: dict, admin_comment: str) 
         # Проверяем тип запроса по наличию ключевых полей
         if payload.get("office_name"):
             # Запрос на работу из другого офиса
-            date_str = f" на {shift_date}" if shift_date else ""
-            return f"Одобрен запрос на работу из другого офиса{date_str}.\n🏢 Офис: {payload.get('office_name')}\n📍 Адрес: {payload.get('office_address', '—')}\n💬 Комментарий HR: {admin_comment}"
+            if shift_date:
+                return f"Запрос на работу из другого офиса на {shift_date} одобрен.\n🏢 Офис: {payload.get('office_name')}\n📍 Адрес: {payload.get('office_address', '—')}\n💬 Комментарий HR: {admin_comment}"
+            else:
+                return f"Запрос на работу из другого офиса одобрен.\n🏢 Офис: {payload.get('office_name')}\n📍 Адрес: {payload.get('office_address', '—')}\n💬 Комментарий HR: {admin_comment}"
         
         elif payload.get("break_start") or "перерыв" in payload.get("reason", "").lower():
             # Запрос на перерыв
