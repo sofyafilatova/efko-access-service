@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import CurrentUser, ShiftManagerPlus
+from app.core.security import CurrentUser, AnyEmployee, ShiftManagerPlus
 
 router = APIRouter(prefix="/web/broadcasts", tags=["Web - Broadcasts"])
 
@@ -20,7 +20,7 @@ class BroadcastCreate(BaseModel):
 def create_broadcast(
     data: BroadcastCreate,
     db: Session = Depends(get_db),
-    user: CurrentUser = ShiftManagerPlus
+    user: CurrentUser = ShiftManagerPlus  # только для HR/администраторов
 ):
     """Создать массовую рассылку (только для HR/администраторов)"""
     
@@ -53,9 +53,9 @@ def get_broadcasts(
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     db: Session = Depends(get_db),
-    _: CurrentUser = ShiftManagerPlus
+    user: CurrentUser = AnyEmployee  # ← ИСПРАВЛЕНО: теперь доступно всем авторизованным
 ):
-    """Получить список всех рассылок (для веб-панели)"""
+    """Получить список всех рассылок (доступно всем авторизованным)"""
     
     query = text("""
         SELECT id, title, body, created_at, created_by_user_id
