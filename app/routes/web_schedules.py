@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from uuid import UUID, uuid4
 from datetime import date, time, datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 
 from app.core.database import get_db
@@ -11,6 +11,7 @@ from app.models.shift import ShiftAssignment
 from app.models.employee import EmployeeView
 from app.models.shift_template import ShiftTemplate
 from app.models.notification import Notification
+from app.models.location import LocationView
 
 router = APIRouter(prefix="/web/schedules", tags=["Web - Schedules"])
 
@@ -162,7 +163,6 @@ def add_shift_to_employee(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Проверка существующей смены по ДАТЕ
     existing = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date == data.shift_date
@@ -171,8 +171,6 @@ def add_shift_to_employee(
     if existing:
         raise HTTPException(status_code=409, detail="Shift already exists for this employee on this date")
     
-    # СОХРАНЯЕМ В ЛОКАЛЬНОМ ВРЕМЕНИ (МОСКВА)
-    # planned_start и planned_end хранятся в МОСКОВСКОМ времени
     start_datetime = datetime.combine(data.shift_date, template.planned_start)
     end_datetime = datetime.combine(data.shift_date, template.planned_end)
     
@@ -181,8 +179,8 @@ def add_shift_to_employee(
         employee_id=data.employee_id,
         shift_template_id=data.shift_template_id,
         shift_date=data.shift_date,
-        planned_start=start_datetime,  # ← теперь в локальном времени
-        planned_end=end_datetime,      # ← теперь в локальном времени
+        planned_start=start_datetime,
+        planned_end=end_datetime,
         status="scheduled"
     )
     db.add(new_shift)
@@ -325,14 +323,12 @@ def send_vacation_notification(
     if data.start_date > data.end_date:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
-    # Удаляем существующие смены в этот период
     db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date >= data.start_date,
         ShiftAssignment.shift_date <= data.end_date
     ).delete()
     
-    # Получаем или создаём шаблон для отпуска
     vacation_template = db.query(ShiftTemplate).filter(ShiftTemplate.code == 'VACATION').first()
     if not vacation_template:
         vacation_template = ShiftTemplate(
@@ -348,7 +344,6 @@ def send_vacation_notification(
         db.commit()
         db.refresh(vacation_template)
     
-    # Создаём записи об отпуске (в локальном времени)
     current_date = data.start_date
     vacation_days = 0
     while current_date <= data.end_date:
@@ -365,7 +360,6 @@ def send_vacation_notification(
         vacation_days += 1
         current_date += timedelta(days=1)
     
-    # Создаём уведомление
     notification_body = f"Оформлен отпуск с {data.start_date} по {data.end_date}"
     if data.reason:
         notification_body += f"\nКомментарий: {data.reason}"
@@ -408,14 +402,12 @@ def send_sick_leave_notification(
     if data.start_date > data.end_date:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
-    # Удаляем существующие смены в этот период
     db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date >= data.start_date,
         ShiftAssignment.shift_date <= data.end_date
     ).delete()
     
-    # Получаем или создаём шаблон для больничного
     sick_template = db.query(ShiftTemplate).filter(ShiftTemplate.code == 'SICK_LEAVE').first()
     if not sick_template:
         sick_template = ShiftTemplate(
@@ -431,7 +423,6 @@ def send_sick_leave_notification(
         db.commit()
         db.refresh(sick_template)
     
-    # Создаём записи о больничном (в локальном времени)
     current_date = data.start_date
     sick_days = 0
     while current_date <= data.end_date:
@@ -448,7 +439,6 @@ def send_sick_leave_notification(
         sick_days += 1
         current_date += timedelta(days=1)
     
-    # Создаём уведомление
     notification_body = f"Оформлен больничный с {data.start_date} по {data.end_date}"
     if data.reason:
         notification_body += f"\nКомментарий: {data.reason}"
@@ -471,6 +461,7 @@ def send_sick_leave_notification(
         "sick_days": sick_days
     }
 
+
 class DayOffRequest(BaseModel):
     employee_id: UUID
     date: date
@@ -486,7 +477,6 @@ def send_day_off_notification(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Удаляем существующую смену в этот день
     existing_shift = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == data.employee_id,
         ShiftAssignment.shift_date == data.date
@@ -495,7 +485,6 @@ def send_day_off_notification(
     if existing_shift:
         db.delete(existing_shift)
     
-    # Получаем или создаём шаблон для отгула
     day_off_template = db.query(ShiftTemplate).filter(ShiftTemplate.code == 'DAY_OFF').first()
     if not day_off_template:
         day_off_template = ShiftTemplate(
@@ -511,7 +500,6 @@ def send_day_off_notification(
         db.commit()
         db.refresh(day_off_template)
     
-    # Создаём запись об отгуле
     day_off_shift = ShiftAssignment(
         id=uuid4(),
         employee_id=data.employee_id,
@@ -523,7 +511,6 @@ def send_day_off_notification(
     )
     db.add(day_off_shift)
     
-    # Создаём уведомление
     notification_body = f"Оформлен отгул на {data.date}"
     if data.reason:
         notification_body += f"\nПричина: {data.reason}"
@@ -557,25 +544,18 @@ def mark_shift_as_missed(
     data: MarkMissedRequest,
     db: Session = Depends(get_db),
 ):
-    """Отметить смену как прогул"""
-    
     shift = db.query(ShiftAssignment).filter(ShiftAssignment.id == data.shift_id).first()
     if not shift:
         raise HTTPException(status_code=404, detail="Shift not found")
     
-    # Получаем информацию о сотруднике
     employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Сохраняем старый статус
     old_status = shift.status
-    
-    # Обновляем статус на missed
     shift.status = "missed"
     db.commit()
     
-    # Создаём уведомление
     notification_body = f"Смена на {shift.shift_date} отмечена как прогул"
     if data.reason:
         notification_body += f"\nПричина: {data.reason}"
@@ -610,27 +590,21 @@ def remind_about_shift(
     data: RemindShiftRequest,
     db: Session = Depends(get_db),
 ):
-    """Отправить напоминание о смене сотруднику"""
-    
     shift = db.query(ShiftAssignment).filter(ShiftAssignment.id == data.shift_id).first()
     if not shift:
         raise HTTPException(status_code=404, detail="Shift not found")
     
-    # Получаем информацию о сотруднике
     employee = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    # Получаем шаблон смены (если есть)
     template = db.query(ShiftTemplate).filter(ShiftTemplate.id == shift.shift_template_id).first()
     
-    # Формируем время
     if template:
         time_str = f"{template.planned_start.strftime('%H:%M')} — {template.planned_end.strftime('%H:%M')}"
     else:
         time_str = f"{shift.planned_start.strftime('%H:%M')} — {shift.planned_end.strftime('%H:%M')}"
     
-    # Создаём уведомление
     notification_body = f"Напоминание: у вас запланирована смена на {shift.shift_date} ({time_str})"
     if data.comment:
         notification_body += f"\nКомментарий: {data.comment}"
@@ -653,3 +627,187 @@ def remind_about_shift(
         "employee_id": str(shift.employee_id),
         "shift_date": shift.shift_date.isoformat()
     }
+
+
+# =====================================================
+# АВТОМАТИЧЕСКОЕ НАЗНАЧЕНИЕ СМЕН
+# =====================================================
+
+class AutoAssignRequest(BaseModel):
+    year: int
+    month: int
+    override_existing: bool = True
+
+
+@router.post("/auto-assign")
+def auto_assign_shifts(
+    data: AutoAssignRequest,
+    db: Session = Depends(get_db),
+):
+    """Автоматическое назначение смен на месяц для всех активных сотрудников"""
+    
+    # Получаем все шаблоны смен
+    templates = db.query(ShiftTemplate).filter(ShiftTemplate.is_active == True).all()
+    office_templates = [t for t in templates if t.code.startswith('OFFICE')]
+    factory_templates = [t for t in templates if t.code.startswith('FACTORY')]
+    
+    # Получаем всех активных сотрудников
+    employees = db.query(EmployeeView).filter(EmployeeView.status == 'active').all()
+    
+    # Определяем тип сотрудника (офис/завод) по локации
+    office_employees = []
+    factory_employees = []
+    
+    for emp in employees:
+        is_office = False
+        if emp.location_id:
+            loc = db.query(LocationView).filter(LocationView.id == emp.location_id).first()
+            if loc and loc.type == 'office':
+                is_office = True
+        if is_office:
+            office_employees.append(emp)
+        else:
+            factory_employees.append(emp)
+    
+    # Генерация смен для офисных сотрудников (5/2, пн-пт)
+    office_shifts_created = 0
+    for emp in office_employees:
+        shifts = generate_office_shifts(emp, data.year, data.month, office_templates, db)
+        office_shifts_created += save_shifts(emp.id, shifts, data.override_existing, db)
+    
+    # Генерация смен для заводских сотрудников (2/2, ротация)
+    factory_shifts_created = 0
+    for emp in factory_employees:
+        shifts = generate_factory_shifts(emp, data.year, data.month, factory_templates, db)
+        factory_shifts_created += save_shifts(emp.id, shifts, data.override_existing, db)
+    
+    return {
+        "message": "Автоназначение завершено",
+        "office_employees": len(office_employees),
+        "factory_employees": len(factory_employees),
+        "office_shifts_created": office_shifts_created,
+        "factory_shifts_created": factory_shifts_created,
+        "total_shifts": office_shifts_created + factory_shifts_created
+    }
+
+
+def generate_office_shifts(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate], db: Session) -> List[dict]:
+    """Генерирует смены для офисного сотрудника (5/2, пн-пт)"""
+    
+    shifts = []
+    start_date = date(year, month, 1)
+    if month == 12:
+        end_date = date(year + 1, 1, 1)
+    else:
+        end_date = date(year, month + 1, 1)
+    
+    office_template = next((t for t in templates if t.code == 'OFFICE-STD'), templates[0] if templates else None)
+    if not office_template:
+        return shifts
+    
+    current_date = start_date
+    while current_date < end_date:
+        if current_date.weekday() < 5:
+            shifts.append({
+                "shift_date": current_date,
+                "planned_start": datetime.combine(current_date, office_template.planned_start),
+                "planned_end": datetime.combine(current_date, office_template.planned_end),
+                "shift_template_id": office_template.id,
+                "status": "scheduled"
+            })
+        current_date += timedelta(days=1)
+    
+    return shifts
+
+
+def generate_factory_shifts(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate], db: Session) -> List[dict]:
+    """Генерирует смены для заводского сотрудника (2/2, ротация)"""
+    
+    shifts = []
+    start_date = date(year, month, 1)
+    if month == 12:
+        end_date = date(year + 1, 1, 1)
+    else:
+        end_date = date(year, month + 1, 1)
+    
+    factory_template_codes = ['FACTORY-MORNING', 'FACTORY-DAY', 'FACTORY-EVENING', 'FACTORY-NIGHT']
+    factory_templates = []
+    for code in factory_template_codes:
+        t = next((t for t in templates if t.code == code), None)
+        if t:
+            factory_templates.append(t)
+    
+    if not factory_templates:
+        return shifts
+    
+    rotation_start = hash(employee.id) % len(factory_templates)
+    
+    current_date = start_date
+    day_counter = 0
+    shift_cycle = 0
+    
+    while current_date < end_date:
+        is_work_day = (day_counter % 4) < 2
+        
+        if is_work_day:
+            template_index = (rotation_start + shift_cycle) % len(factory_templates)
+            template = factory_templates[template_index]
+            
+            current_start = datetime.combine(current_date, template.planned_start)
+            if shifts:
+                last_shift = shifts[-1]
+                last_end = last_shift["planned_end"]
+                hours_diff = (current_start - last_end).total_seconds() / 3600
+                if hours_diff < 12:
+                    current_start = last_end + timedelta(hours=12)
+            
+            shifts.append({
+                "shift_date": current_date,
+                "planned_start": current_start,
+                "planned_end": datetime.combine(current_date, template.planned_end) if template.planned_end >= template.planned_start 
+                              else datetime.combine(current_date + timedelta(days=1), template.planned_end),
+                "shift_template_id": template.id,
+                "status": "scheduled"
+            })
+            shift_cycle = (shift_cycle + 1) % len(factory_templates)
+        
+        current_date += timedelta(days=1)
+        day_counter += 1
+    
+    return shifts
+
+
+def save_shifts(employee_id: UUID, new_shifts: List[dict], override_existing: bool, db: Session) -> int:
+    """Сохраняет смены в БД"""
+    
+    shifts_created = 0
+    
+    for shift_data in new_shifts:
+        shift_date = shift_data["shift_date"]
+        
+        if override_existing:
+            db.query(ShiftAssignment).filter(
+                ShiftAssignment.employee_id == employee_id,
+                ShiftAssignment.shift_date == shift_date
+            ).delete()
+        
+        existing = db.query(ShiftAssignment).filter(
+            ShiftAssignment.employee_id == employee_id,
+            ShiftAssignment.shift_date == shift_date
+        ).first()
+        
+        if not existing:
+            new_shift = ShiftAssignment(
+                id=uuid4(),
+                employee_id=employee_id,
+                shift_template_id=shift_data["shift_template_id"],
+                shift_date=shift_data["shift_date"],
+                planned_start=shift_data["planned_start"],
+                planned_end=shift_data["planned_end"],
+                status=shift_data["status"]
+            )
+            db.add(new_shift)
+            shifts_created += 1
+    
+    db.commit()
+    return shifts_created
