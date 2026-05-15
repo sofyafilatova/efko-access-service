@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID, uuid4
 from datetime import datetime
-import json
+import re
 
 from app.core.database import get_db
 from app.core.security import AnyEmployee, ShiftManagerPlus, CurrentUser
@@ -152,6 +152,14 @@ def _format_notification_body(req_type: str, payload: dict, admin_comment: str) 
     if req_type == "shift_change":
         # Извлекаем дату из разных возможных полей
         shift_date = payload.get("requested_date") or payload.get("date") or payload.get("shift_date")
+        
+        # Если дата не найдена в отдельных полях, ищем её в reason или comment
+        if not shift_date:
+            reason_text = payload.get("reason", "") + " " + payload.get("comment", "")
+            # Ищем дату в формате ГГГГ-ММ-ДД
+            date_match = re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', reason_text)
+            if date_match:
+                shift_date = date_match.group(1)
         
         # Проверяем тип запроса по наличию ключевых полей
         if payload.get("office_name"):
