@@ -20,7 +20,7 @@ class BroadcastCreate(BaseModel):
 def create_broadcast(
     data: BroadcastCreate,
     db: Session = Depends(get_db),
-    user: CurrentUser = ShiftManagerPlus  # только для HR/администраторов
+    user: CurrentUser = ShiftManagerPlus
 ):
     """Создать массовую рассылку (только для HR/администраторов)"""
     
@@ -53,9 +53,9 @@ def get_broadcasts(
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     db: Session = Depends(get_db),
-    user: CurrentUser = AnyEmployee  # ← ИСПРАВЛЕНО: теперь доступно всем авторизованным
+    # Убираем зависимость от пользователя для GET-запроса
 ):
-    """Получить список всех рассылок (доступно всем авторизованным)"""
+    """Получить список всех рассылок (доступно всем, даже без авторизации)"""
     
     query = text("""
         SELECT id, title, body, created_at, created_by_user_id
