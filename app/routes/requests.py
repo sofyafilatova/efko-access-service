@@ -94,14 +94,12 @@ def approve_request(
     req.processed_by_user_id = user.user_id
     req.processed_at = datetime.utcnow()
 
-    # Применяем изменение профиля автоматически
     if req.type == "profile_change":
         _apply_profile_change(db, req.employee_id, req.payload)
 
     db.commit()
     db.refresh(req)
 
-    # Формируем понятное уведомление в зависимости от payload
     notification_body = _format_notification_body(req.type, req.payload, data.admin_comment)
 
     create_notification(
@@ -150,39 +148,34 @@ def _format_notification_body(req_type: str, payload: dict, admin_comment: str) 
     """Формирует понятное тело уведомления в зависимости от типа и содержимого запроса"""
     
     if req_type == "shift_change":
-        # Извлекаем дату из разных возможных полей
         shift_date = payload.get("requested_date") or payload.get("date") or payload.get("shift_date")
         
-        # Если дата не найдена в отдельных полях, ищем её в reason или comment
         if not shift_date:
             reason_text = payload.get("reason", "") + " " + payload.get("comment", "")
-            # Ищем дату в формате ГГГГ-ММ-ДД
             date_match = re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', reason_text)
             if date_match:
                 shift_date = date_match.group(1)
         
-        # Проверяем тип запроса по наличию ключевых полей
         if payload.get("office_name"):
-            # Запрос на работу из другого офиса
+            # Запрос на работу из другого офиса — ОБЯЗАТЕЛЬНО указываем название офиса
+            office_name = payload.get('office_name')
+            office_address = payload.get('office_address', '—')
+            
             if shift_date:
-                return f"Запрос на работу из другого офиса на {shift_date} одобрен.\n🏢 Офис: {payload.get('office_name')}\n📍 Адрес: {payload.get('office_address', '—')}\n💬 Комментарий HR: {admin_comment}"
+                return f"Запрос на работу из другого офиса на {shift_date} одобрен.\n📍 Офис: {office_name}\n🏢 Адрес: {office_address}\n💬 Комментарий HR: {admin_comment}"
             else:
-                return f"Запрос на работу из другого офиса одобрен.\n🏢 Офис: {payload.get('office_name')}\n📍 Адрес: {payload.get('office_address', '—')}\n💬 Комментарий HR: {admin_comment}"
+                return f"Запрос на работу из другого офиса одобрен.\n📍 Офис: {office_name}\n🏢 Адрес: {office_address}\n💬 Комментарий HR: {admin_comment}"
         
         elif payload.get("break_start") or "перерыв" in payload.get("reason", "").lower():
-            # Запрос на перерыв
             return f"Одобрен перерыв в смене.\n💬 Комментарий HR: {admin_comment}"
         
         elif shift_date and ("отгул" in payload.get("reason", "").lower() or payload.get("is_day_off")):
-            # Запрос на отгул
             return f"Одобрен отгул на {shift_date}.\n📝 Причина: {payload.get('reason', '—')}\n💬 Комментарий HR: {admin_comment}"
         
         elif shift_date:
-            # Запрос на изменение графика (конкретная дата)
             return f"Одобрено изменение графика: смена на {shift_date}.\n📝 Причина: {payload.get('reason', '—')}\n💬 Комментарий HR: {admin_comment}"
         
         else:
-            # Общий случай (без даты)
             return f"Одобрен запрос на изменение графика.\n📝 Причина: {payload.get('reason', '—')}\n💬 Комментарий HR: {admin_comment}"
     
     elif req_type == "profile_change":
