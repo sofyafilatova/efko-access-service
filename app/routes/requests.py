@@ -100,7 +100,7 @@ def approve_request(
     db.commit()
     db.refresh(req)
 
-    notification_body = _format_notification_body(req.type, req.payload, data.admin_comment)
+    notification_body = _format_notification_body(req.type, req.payload, data.admin_comment, is_approved=True)
 
     create_notification(
         db,
@@ -133,19 +133,23 @@ def reject_request(
     db.commit()
     db.refresh(req)
 
+    notification_body = _format_notification_body(req.type, req.payload, data.admin_comment, is_approved=False)
+
     create_notification(
         db,
         employee_id=req.employee_id,
         title="❌ Запрос отклонён",
-        body=f"Ваш запрос отклонён.\n📝 Причина: {data.admin_comment}",
+        body=notification_body,
         category="request",
     )
 
     return req
 
 
-def _format_notification_body(req_type: str, payload: dict, admin_comment: str) -> str:
+def _format_notification_body(req_type: str, payload: dict, admin_comment: str, is_approved: bool = True) -> str:
     """Формирует понятное тело уведомления в зависимости от типа и содержимого запроса"""
+    
+    action_text = "одобрен" if is_approved else "отклонён"
     
     if req_type == "shift_change":
         shift_date = payload.get("requested_date") or payload.get("date") or payload.get("shift_date")
@@ -157,26 +161,26 @@ def _format_notification_body(req_type: str, payload: dict, admin_comment: str) 
                 shift_date = date_match.group(1)
         
         if payload.get("office_name"):
-            # Запрос на работу из другого офиса — ОБЯЗАТЕЛЬНО указываем название офиса
+            # Запрос на работу из другого офиса
             office_name = payload.get('office_name')
             office_address = payload.get('office_address', '—')
             
             if shift_date:
-                return f"Запрос на работу из другого офиса на {shift_date} одобрен.\n📍 Офис: {office_name}\n🏢 Адрес: {office_address}\n💬 Комментарий HR: {admin_comment}"
+                return f"Запрос на работу из другого офиса на {shift_date} {action_text}.\n📍 Офис: {office_name}\n🏢 Адрес: {office_address}"
             else:
-                return f"Запрос на работу из другого офиса одобрен.\n📍 Офис: {office_name}\n🏢 Адрес: {office_address}\n💬 Комментарий HR: {admin_comment}"
+                return f"Запрос на работу из другого офиса {action_text}.\n📍 Офис: {office_name}\n🏢 Адрес: {office_address}"
         
         elif payload.get("break_start") or "перерыв" in payload.get("reason", "").lower():
-            return f"Одобрен перерыв в смене.\n💬 Комментарий HR: {admin_comment}"
+            return f"Запрос на перерыв в смене {action_text}."
         
         elif shift_date and ("отгул" in payload.get("reason", "").lower() or payload.get("is_day_off")):
-            return f"Одобрен отгул на {shift_date}.\n📝 Причина: {payload.get('reason', '—')}\n💬 Комментарий HR: {admin_comment}"
+            return f"Запрос на отгул на {shift_date} {action_text}.\n📝 Причина: {payload.get('reason', '—')}"
         
         elif shift_date:
-            return f"Одобрено изменение графика: смена на {shift_date}.\n📝 Причина: {payload.get('reason', '—')}\n💬 Комментарий HR: {admin_comment}"
+            return f"Запрос на изменение графика: смена на {shift_date} {action_text}.\n📝 Причина: {payload.get('reason', '—')}"
         
         else:
-            return f"Одобрен запрос на изменение графика.\n📝 Причина: {payload.get('reason', '—')}\n💬 Комментарий HR: {admin_comment}"
+            return f"Запрос на изменение графика {action_text}.\n📝 Причина: {payload.get('reason', '—')}"
     
     elif req_type == "profile_change":
         changes = []
@@ -186,16 +190,16 @@ def _format_notification_body(req_type: str, payload: dict, admin_comment: str) 
             changes.append(f"email: {payload.get('email')}")
         if payload.get("reason"):
             changes.append(f"причина: {payload.get('reason')}")
-        return f"✅ Изменение профиля одобрено.\n📝 {', '.join(changes)}"
+        return f"Изменение профиля {action_text}.\n📝 {', '.join(changes)}"
     
     elif req_type == "extend_shift":
-        return f"✅ Одобрено продление смены.\n💬 Комментарий HR: {admin_comment}"
+        return f"Запрос на продление смены {action_text}."
     
     elif req_type == "additional_access":
-        return f"✅ Одобрен запрос на дополнительный доступ к зоне: {payload.get('zone_name', '—')}\n💬 Комментарий HR: {admin_comment}"
+        return f"Запрос на дополнительный доступ к зоне {payload.get('zone_name', '—')} {action_text}."
     
     else:
-        return f"✅ Ваш запрос «{req_type}» был одобрен.\n💬 Комментарий HR: {admin_comment}"
+        return f"Ваш запрос {action_text}."
 
 
 def _apply_profile_change(db: Session, employee_id: UUID, payload: dict):
