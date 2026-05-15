@@ -470,3 +470,78 @@ def send_sick_leave_notification(
         "message": "Sick leave notification sent successfully",
         "sick_days": sick_days
     }
+
+class DayOffRequest(BaseModel):
+    employee_id: UUID
+    date: date
+    reason: Optional[str] = None
+
+
+@router.post("/send-day-off")
+def send_day_off_notification(
+    data: DayOffRequest,
+    db: Session = Depends(get_db),
+):
+    employee = db.query(EmployeeView).filter(EmployeeView.id == data.employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    # Удаляем существующую смену в этот день
+    existing_shift = db.query(ShiftAssignment).filter(
+        ShiftAssignment.employee_id == data.employee_id,
+        ShiftAssignment.shift_date == data.date
+    ).first()
+    
+    if existing_shift:
+        db.delete(existing_shift)
+    
+    # Получаем или создаём шаблон для отгула
+    day_off_template = db.query(ShiftTemplate).filter(ShiftTemplate.code == 'DAY_OFF').first()
+    if not day_off_template:
+        day_off_template = ShiftTemplate(
+            id=uuid4(),
+            name="Отгул",
+            code="DAY_OFF",
+            planned_start=datetime.strptime("00:00", "%H:%M").time(),
+            planned_end=datetime.strptime("00:00", "%H:%M").time(),
+            work_days_pattern="0000000",
+            is_active=True
+        )
+        db.add(day_off_template)
+        db.commit()
+        db.refresh(day_off_template)
+    
+    # Создаём запись об отгуле
+    day_off_shift = ShiftAssignment(
+        id=uuid4(),
+        employee_id=data.employee_id,
+        shift_template_id=day_off_template.id,
+        shift_date=data.date,
+        planned_start=datetime.combine(data.date, day_off_template.planned_start),
+        planned_end=datetime.combine(data.date, day_off_template.planned_end),
+        status="day_off"
+    )
+    db.add(day_off_shift)
+    
+    # Создаём уведомление
+    notification_body = f"Оформлен отгул на {data.date}"
+    if data.reason:
+        notification_body += f"\nПричина: {data.reason}"
+    
+    notification = Notification(
+        id=uuid4(),
+        employee_id=data.employee_id,
+        title="🎯 Отгул оформлен",
+        body=notification_body,
+        category="day_off",
+        is_read=False,
+        created_at=datetime.utcnow()
+    )
+    db.add(notification)
+    
+    db.commit()
+    
+    return {
+        "message": "Day off notification sent successfully",
+        "date": data.date.isoformat()
+    }
