@@ -839,43 +839,54 @@ def validate_tk_rf(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Берём смены за месяц
-    month_shifts = db.query(ShiftAssignment).filter(
+    # Берём смены за месяц + немного до и после для расчёта отдыха
+    prev_start = start_date - timedelta(days=7)
+    next_end = end_date + timedelta(days=7)
+    
+    all_shifts = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == employee_id,
-        ShiftAssignment.shift_date >= start_date,
-        ShiftAssignment.shift_date <= end_date,
+        ShiftAssignment.shift_date >= prev_start,
+        ShiftAssignment.shift_date <= next_end,
         ShiftAssignment.status.in_(['scheduled', 'in_progress', 'completed'])
     ).order_by(ShiftAssignment.shift_date, ShiftAssignment.planned_start).all()
     
+    # Фильтруем смены только за месяц для подсчёта часов
+    month_shifts = [s for s in all_shifts if start_date <= s.shift_date <= end_date]
+    
     # =========================================================
-    # 1. Межсменный отдых (только между последовательными сменами)
+    # 1. Межсменный отдых (между ЛЮБЫМИ последовательными сменами, даже если есть перерыв в днях)
     # =========================================================
     min_rest_hours = None
     rest_violations = []
     
-    for i in range(1, len(month_shifts)):
-        prev_end = month_shifts[i-1].planned_end
-        curr_start = month_shifts[i].planned_start
+    # Берём все смены подряд (включая те, что до и после месяца для правильного расчёта)
+    for i in range(1, len(all_shifts)):
+        prev_shift = all_shifts[i-1]
+        curr_shift = all_shifts[i]
+        
+        prev_end = prev_shift.planned_end
+        curr_start = curr_shift.planned_start
         rest_hours = (curr_start - prev_end).total_seconds() / 3600
         
-        # Если смена идёт в тот же день или на следующий день (разница в днях <= 2)
-        # Иначе это плановый перерыв в графике 2/2, который не считается нарушением
-        day_diff = (month_shifts[i].shift_date - month_shifts[i-1].shift_date).days
+        # Для графика 2/2 — отдых между сменами может быть 24-72 часа
+        # Нас интересует минимальный отдых, но только если смены идут подряд по дням (разница ≤ 2 дня)
+        day_diff = (curr_shift.shift_date - prev_shift.shift_date).days
         
-        # Проверяем только последовательные смены (разница в днях 0 или 1)
-        if day_diff <= 1:
+        # Если смены идут с разрывом более 3 дней — это плановый выходной, не считаем нарушением
+        if day_diff <= 2:
             if min_rest_hours is None or rest_hours < min_rest_hours:
                 min_rest_hours = round(rest_hours, 1)
             
             if rest_hours < 12:
                 rest_violations.append({
-                    "date": month_shifts[i].shift_date.isoformat(),
+                    "date1": prev_shift.shift_date.isoformat(),
+                    "date2": curr_shift.shift_date.isoformat(),
                     "rest_hours": round(rest_hours, 1)
                 })
     
     rest_ok = len(rest_violations) == 0
     if min_rest_hours is None:
-        min_rest_hours = 24  # нет последовательных смен
+        min_rest_hours = 24
     
     # =========================================================
     # 2. Недельная нагрузка
@@ -892,11 +903,10 @@ def validate_tk_rf(
     weekly_hours_ok = max_weekly_hours <= 40
     
     # =========================================================
-    # 3. Еженедельный отдых (между последней сменой недели и первой следующей)
+    # 3. Еженедельный отдых
     # =========================================================
-    # Группируем смены по неделям
     week_shifts_map = {}
-    for shift in month_shifts:
+    for shift in all_shifts:
         week_num = shift.shift_date.isocalendar()[1]
         year_num = shift.shift_date.year
         key = f"{year_num}-{week_num}"
