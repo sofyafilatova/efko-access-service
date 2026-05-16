@@ -14,6 +14,7 @@ from app.routes.notifications import router as notifications_router
 import asyncio
 from app.core.rabbitmq import close as rabbitmq_close
 from app.services.personnel_consumer import start_personnel_consumer
+from app.services.shift_status_updater import run_shift_status_updater
 from app.core.config import settings
 from app.routes.requests import router as requests_router
 from app.routes.web_employees import router as web_employees_router
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 access-service starting...")
+    
+    # Запускаем фоновую задачу обновления статусов смен
+    asyncio.create_task(run_shift_status_updater())
+    
     asyncio.create_task(start_personnel_consumer())
     yield
     await rabbitmq_close()
