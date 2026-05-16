@@ -837,13 +837,19 @@ def validate_tk_rf(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Получаем все смены за месяц
-    month_shifts = db.query(ShiftAssignment).filter(
+    # Получаем все смены за месяц + по одной смене до и после для расчёта переходов
+    prev_start = start_date - timedelta(days=7)
+    next_end = end_date + timedelta(days=7)
+    
+    all_shifts = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == employee_id,
-        ShiftAssignment.shift_date >= start_date,
-        ShiftAssignment.shift_date <= end_date,
+        ShiftAssignment.shift_date >= prev_start,
+        ShiftAssignment.shift_date <= next_end,
         ShiftAssignment.status.in_(['scheduled', 'in_progress', 'completed'])
     ).order_by(ShiftAssignment.shift_date, ShiftAssignment.planned_start).all()
+    
+    # Фильтруем только смены за месяц для подсчёта часов
+    month_shifts = [s for s in all_shifts if start_date <= s.shift_date <= end_date]
     
     if not month_shifts:
         return {
@@ -856,21 +862,22 @@ def validate_tk_rf(
         }
     
     # =========================================================
-    # 1. Межсменный отдых (между последовательными сменами)
+    # 1. Межсменный отдых (между ЛЮБЫМИ последовательными сменами)
     # =========================================================
     rest_hours_list = []
     rest_violations = []
     
-    for i in range(1, len(month_shifts)):
-        prev_end = month_shifts[i-1].planned_end
-        curr_start = month_shifts[i].planned_start
+    for i in range(1, len(all_shifts)):
+        prev_end = all_shifts[i-1].planned_end
+        curr_start = all_shifts[i].planned_start
         rest_hours = (curr_start - prev_end).total_seconds() / 3600
         rest_hours_list.append(rest_hours)
         
+        # Если отдых меньше 12 часов и это не перерыв между месяцами
         if rest_hours < 12:
             rest_violations.append({
-                "date": month_shifts[i].shift_date.isoformat(),
-                "prev_date": month_shifts[i-1].shift_date.isoformat(),
+                "date": all_shifts[i].shift_date.isoformat(),
+                "prev_date": all_shifts[i-1].shift_date.isoformat(),
                 "rest_hours": round(rest_hours, 1)
             })
     
@@ -944,7 +951,6 @@ def validate_tk_rf(
     for shift in month_shifts:
         start_hour = shift.planned_start.hour
         end_hour = shift.planned_end.hour
-        # Ночная смена: начинается с 22:00 до 06:00 ИЛИ заканчивается с 22:00 до 06:00
         if start_hour >= 22 or (end_hour <= 6 and end_hour > 0) or (start_hour < 6 and end_hour <= 6):
             night_shifts_count += 1
     
