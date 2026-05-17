@@ -837,9 +837,9 @@ def validate_tk_rf(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Получаем все смены за месяц + по одной смене до и после для расчёта переходов
-    prev_start = start_date - timedelta(days=7)
-    next_end = end_date + timedelta(days=7)
+    # Берём смены за месяц + по 2 дня до и после для расчёта переходов
+    prev_start = start_date - timedelta(days=2)
+    next_end = end_date + timedelta(days=2)
     
     all_shifts = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == employee_id,
@@ -848,7 +848,7 @@ def validate_tk_rf(
         ShiftAssignment.status.in_(['scheduled', 'in_progress', 'completed'])
     ).order_by(ShiftAssignment.shift_date, ShiftAssignment.planned_start).all()
     
-    # Фильтруем только смены за месяц для подсчёта часов
+    # Смены за месяц
     month_shifts = [s for s in all_shifts if start_date <= s.shift_date <= end_date]
     
     if not month_shifts:
@@ -862,27 +862,27 @@ def validate_tk_rf(
         }
     
     # =========================================================
-    # 1. Межсменный отдых (между ЛЮБЫМИ последовательными сменами)
+    # 1. Межсменный отдых (только для смен в разные дни)
     # =========================================================
     rest_hours_list = []
-    rest_violations = []
     
     for i in range(1, len(all_shifts)):
-        prev_end = all_shifts[i-1].planned_end
-        curr_start = all_shifts[i].planned_start
-        rest_hours = (curr_start - prev_end).total_seconds() / 3600
-        rest_hours_list.append(rest_hours)
+        prev_shift = all_shifts[i-1]
+        curr_shift = all_shifts[i]
         
-        # Если отдых меньше 12 часов и это не перерыв между месяцами
-        if rest_hours < 12:
-            rest_violations.append({
-                "date": all_shifts[i].shift_date.isoformat(),
-                "prev_date": all_shifts[i-1].shift_date.isoformat(),
-                "rest_hours": round(rest_hours, 1)
-            })
+        # Если смены в один день — пропускаем (это одна и та же смена? такого не должно быть)
+        if prev_shift.shift_date == curr_shift.shift_date:
+            continue
+        
+        rest_hours = (curr_shift.planned_start - prev_shift.planned_end).total_seconds() / 3600
+        rest_hours_list.append(rest_hours)
     
-    min_rest_hours = round(min(rest_hours_list), 1) if rest_hours_list else 24
-    rest_ok = len(rest_violations) == 0
+    if rest_hours_list:
+        min_rest_hours = round(min(rest_hours_list), 1)
+        rest_ok = min_rest_hours >= 12
+    else:
+        min_rest_hours = None
+        rest_ok = True  # Нет пар смен для проверки
     
     # =========================================================
     # 2. Недельная нагрузка
@@ -911,28 +911,25 @@ def validate_tk_rf(
             week_shifts_map[key] = []
         week_shifts_map[key].append(shift)
     
-    weekly_rest_violations = []
-    week_keys = sorted(week_shifts_map.keys())
     weekly_rest_values = []
+    week_keys = sorted(week_shifts_map.keys())
     
     for i in range(len(week_keys) - 1):
         current_week_key = week_keys[i]
         next_week_key = week_keys[i + 1]
         
-        last_shift_current = max(week_shifts_map[current_week_key], key=lambda x: x.planned_end)
-        first_shift_next = min(week_shifts_map[next_week_key], key=lambda x: x.planned_start)
+        last_shift_current = max(week_shifts_map[current_week_key], key=lambda x: x.shift_date)
+        first_shift_next = min(week_shifts_map[next_week_key], key=lambda x: x.shift_date)
         
         rest_hours = (first_shift_next.planned_start - last_shift_current.planned_end).total_seconds() / 3600
         weekly_rest_values.append(round(rest_hours, 1))
-        
-        if rest_hours < 42:
-            weekly_rest_violations.append({
-                "week": current_week_key,
-                "rest_hours": round(rest_hours, 1)
-            })
     
-    min_weekly_rest = min(weekly_rest_values) if weekly_rest_values else 48
-    weekly_rest_ok = len(weekly_rest_violations) == 0
+    if weekly_rest_values:
+        min_weekly_rest = min(weekly_rest_values)
+        weekly_rest_ok = min_weekly_rest >= 42
+    else:
+        min_weekly_rest = None
+        weekly_rest_ok = True  # Нет переходов между неделями
     
     # =========================================================
     # 4. Сверхурочные
@@ -951,6 +948,7 @@ def validate_tk_rf(
     for shift in month_shifts:
         start_hour = shift.planned_start.hour
         end_hour = shift.planned_end.hour
+        # Ночная смена: начинается после 22:00 ИЛИ заканчивается до 06:00 (и не равна 00:00)
         if start_hour >= 22 or (end_hour <= 6 and end_hour > 0) or (start_hour < 6 and end_hour <= 6):
             night_shifts_count += 1
     
@@ -960,7 +958,7 @@ def validate_tk_rf(
     work_days_in_month = 0
     current_date = start_date
     while current_date <= end_date:
-        if current_date.weekday() < 5:
+        if current_date.weekday() < 5:  # пн-пт
             work_days_in_month += 1
         current_date += timedelta(days=1)
     
@@ -969,9 +967,8 @@ def validate_tk_rf(
     month_hours_ok = total_hours_month <= month_norm
     
     # =========================================================
-    # 7. Формируем ответ
+    # 7. Ответ
     # =========================================================
-    
     return {
         "employee_id": str(employee_id),
         "employee_name": employee.full_name,
@@ -988,15 +985,13 @@ def validate_tk_rf(
                 "value": min_rest_hours,
                 "required": "≥ 12 часов",
                 "is_ok": rest_ok,
-                "message": f"Минимальный отдых между сменами: {min_rest_hours} ч.",
-                "violations": len(rest_violations)
+                "message": f"Минимальный отдых между сменами: {min_rest_hours} ч." if min_rest_hours else "Нет пар смен для проверки"
             },
             "weekly_rest": {
                 "value": min_weekly_rest,
                 "required": "≥ 42 часов",
                 "is_ok": weekly_rest_ok,
-                "message": f"Минимальный отдых между неделями: {min_weekly_rest} ч.",
-                "violations": len(weekly_rest_violations)
+                "message": f"Минимальный отдых между неделями: {min_weekly_rest} ч." if min_weekly_rest else "Нет переходов между неделями"
             },
             "weekly_hours": {
                 "value": round(max_weekly_hours, 1),
