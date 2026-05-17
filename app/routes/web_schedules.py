@@ -727,6 +727,9 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     """
     Заводские сотрудники: график 2/2 (2 дня работы, 2 дня отдыха)
     Смены чередуются по кругу: УТРЕННЯЯ → ДНЕВНАЯ → ВЕЧЕРНЯЯ → НОЧНАЯ → УТРЕННЯЯ...
+    
+    Важно: после ночной смены (22:00-06:00) следующий рабочий день пропускается,
+    чтобы обеспечить минимальный отдых 12 часов между сменами.
     """
     
     shifts = []
@@ -753,10 +756,22 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     current_date = start_date
     day_in_cycle = 0  # 0,1 - работа, 2,3 - отдых
     template_index = start_index
+    last_shift_was_night = False  # Флаг, была ли предыдущая смена ночной
     
     while current_date < end_date:
         # Дни работы: 0 и 1 в 4-дневном цикле
-        if day_in_cycle < 2:
+        is_work_day = day_in_cycle < 2
+        
+        # Если предыдущая смена была ночной, пропускаем следующий рабочий день
+        if last_shift_was_night and is_work_day:
+            # Пропускаем этот рабочий день (отдых после ночной смены)
+            last_shift_was_night = False
+            # Переходим к следующему дню, но не меняем day_in_cycle (остаёмся на том же рабочем дне)
+            current_date += timedelta(days=1)
+            day_in_cycle = (day_in_cycle + 1) % 4
+            continue
+        
+        if is_work_day:
             template = factory_templates[template_index % len(factory_templates)]
             
             current_start = datetime.combine(current_date, template.planned_start)
@@ -764,8 +779,10 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
             # Если смена ночная (заканчивается на следующий день)
             if template.planned_end >= template.planned_start:
                 current_end = datetime.combine(current_date, template.planned_end)
+                is_night = False
             else:
                 current_end = datetime.combine(current_date + timedelta(days=1), template.planned_end)
+                is_night = True
             
             shifts.append({
                 "shift_date": current_date,
@@ -774,6 +791,9 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
                 "shift_template_id": template.id,
                 "status": "scheduled"
             })
+            
+            # Запоминаем, была ли смена ночной
+            last_shift_was_night = is_night
             
             # После каждого рабочего дня переходим к следующему типу смены
             template_index += 1
