@@ -679,6 +679,7 @@ def auto_assign_shifts(
     
     factory_shifts_created = 0
     for emp in factory_employees:
+        # ВАЖНО: используем ИСПРАВЛЕННУЮ функцию
         shifts = generate_factory_shifts_fixed(emp, data.year, data.month, factory_templates)
         factory_shifts_created += save_shifts(emp.id, shifts, data.override_existing, db)
     
@@ -725,7 +726,7 @@ def generate_office_shifts(employee: EmployeeView, year: int, month: int, templa
 def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate]) -> List[dict]:
     """
     Заводские сотрудники: график 2/2 (2 дня работы, 2 дня отдыха)
-    Смены чередуются по кругу: MORNING → DAY → EVENING → NIGHT → MORNING...
+    Смены чередуются по кругу: УТРЕННЯЯ → ДНЕВНАЯ → ВЕЧЕРНЯЯ → НОЧНАЯ → УТРЕННЯЯ...
     """
     
     shifts = []
@@ -735,7 +736,7 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     else:
         end_date = date(year, month + 1, 1)
     
-    # Шаблоны смен в правильном порядке
+    # Шаблоны смен в правильном порядке для ротации
     template_order = ['FACTORY-MORNING', 'FACTORY-DAY', 'FACTORY-EVENING', 'FACTORY-NIGHT']
     factory_templates = []
     for code in template_order:
@@ -754,7 +755,7 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     template_index = start_index
     
     while current_date < end_date:
-        # Дни работы: 0 и 1 в цикле
+        # Дни работы: 0 и 1 в 4-дневном цикле
         if day_in_cycle < 2:
             template = factory_templates[template_index % len(factory_templates)]
             
@@ -774,7 +775,7 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
                 "status": "scheduled"
             })
             
-            # После каждого рабочего дня меняем тип смены
+            # После каждого рабочего дня переходим к следующему типу смены
             template_index += 1
         
         current_date += timedelta(days=1)
