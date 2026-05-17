@@ -239,7 +239,7 @@ def get_shift_analytics(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Получаем все ЗАВЕРШЁННЫЕ смены за месяц с employee_id
+    # Получаем все ЗАВЕРШЁННЫЕ смены за месяц
     query = text("""
         SELECT 
             s.employee_id,
@@ -260,7 +260,7 @@ def get_shift_analytics(
     total_shifts = len(rows)
     shift_types = {"morning": 0, "day": 0, "evening": 0, "night": 0}
     
-    # Группируем часы по сотрудникам и неделям для расчёта сверхурочных
+    # Группируем часы по сотрудникам и неделям
     employee_weekly_hours = {}  # {employee_id: {week_key: hours}}
     
     for row in rows:
@@ -306,11 +306,16 @@ def get_shift_analytics(
             if week_hours > 40:
                 overtime += week_hours - 40
     
+    # Добавляем информацию о количестве сотрудников
+    unique_employees = len(employee_weekly_hours)
+    
     return {
         "day_shifts": day_shifts,
         "night_shifts": night_shifts,
         "total_shifts": total_shifts,
         "total_hours": round(total_hours, 1),
         "overtime": round(overtime, 1),
-        "shift_types": shift_types
+        "shift_types": shift_types,
+        "unique_employees": unique_employees,  # ← добавил для отладки
+        "avg_hours_per_employee": round(total_hours / unique_employees, 1) if unique_employees > 0 else 0
     }
