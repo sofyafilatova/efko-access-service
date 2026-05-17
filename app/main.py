@@ -27,6 +27,7 @@ from app.routes.attendance_web import router as attendance_web_router
 from app.routes.web_bookings import router as web_bookings_router
 from app.routes.web_schedules import router as web_schedules_router
 from app.routes.web_broadcasts import router as web_broadcasts_router
+from app.routes import web_reports
 
 
 print(f"DEBUG RABBITMQ_URL = {settings.rabbitmq_url}")
@@ -81,6 +82,7 @@ app.include_router(web_broadcasts_router, prefix="/api")
 
 # 👇 НОВЫЕ ПОДКЛЮЧЕНИЯ
 app.include_router(web_employee_status_router, prefix="/api")
+app.include_router(web_reports.router, prefix="/api")
 
 @app.get("/health")
 async def health():
