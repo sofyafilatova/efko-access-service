@@ -726,10 +726,11 @@ def generate_office_shifts(employee: EmployeeView, year: int, month: int, templa
 def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate]) -> List[dict]:
     """
     Заводские сотрудники: график 2/2 (2 дня работы, 2 дня отдыха)
-    Смены чередуются: УТРО → ДЕНЬ → ВЕЧЕР → УТРО → ДЕНЬ → ВЕЧЕР...
-    Ночная смена назначается только 1 раз в месяц, если после неё есть гарантированный отдых
+    Ротация смен внутри пары рабочих дней:
+      - Обычные пары: (УТРО, ДЕНЬ) или (ДЕНЬ, ВЕЧЕР)
+      - Одна пара в месяц (в середине) может быть (ДЕНЬ, НОЧЬ) для ночной смены
+    Гарантируется отдых не менее 12 часов между сменами.
     """
-    
     shifts = []
     start_date = date(year, month, 1)
     if month == 12:
@@ -737,23 +738,22 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     else:
         end_date = date(year, month + 1, 1)
     
-    # Шаблоны смен
-    morning_template = next((t for t in templates if t.code == 'FACTORY-MORNING'), None)
-    day_template = next((t for t in templates if t.code == 'FACTORY-DAY'), None)
-    evening_template = next((t for t in templates if t.code == 'FACTORY-EVENING'), None)
-    night_template = next((t for t in templates if t.code == 'FACTORY-NIGHT'), None)
+    # Получаем шаблоны
+    morning = next((t for t in templates if t.code == 'FACTORY-MORNING'), None)
+    day = next((t for t in templates if t.code == 'FACTORY-DAY'), None)
+    evening = next((t for t in templates if t.code == 'FACTORY-EVENING'), None)
+    night = next((t for t in templates if t.code == 'FACTORY-NIGHT'), None)
     
-    day_templates = [t for t in [morning_template, day_template, evening_template] if t]
-    if not day_templates:
+    if not all([morning, day, evening]):
+        # Если нет нужных шаблонов, возвращаем пустой список
         return shifts
     
-    # Определяем все рабочие дни месяца по графику 2/2
+    # Определяем рабочие дни по графику 2/2
     work_dates = []
     current_date = start_date
-    day_in_cycle = 0
-    
+    day_in_cycle = 0  # 0,1 - работа, 2,3 - отдых
     while current_date < end_date:
-        if day_in_cycle < 2:  # рабочий день
+        if day_in_cycle < 2:
             work_dates.append(current_date)
         current_date += timedelta(days=1)
         day_in_cycle = (day_in_cycle + 1) % 4
@@ -761,50 +761,65 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     if not work_dates:
         return shifts
     
-    # Определяем стартовую позицию в ротации
-    start_index = abs(hash(employee.id)) % len(day_templates)
-    template_index = start_index
+    # Разбиваем рабочие дни на пары (по 2 дня)
+    pairs = [work_dates[i:i+2] for i in range(0, len(work_dates), 2)]
     
-    # Назначаем смены
-    for i, shift_date in enumerate(work_dates):
-        # Проверяем, можно ли поставить ночную смену
-        can_use_night = False
-        if night_template:
-            # Проверяем, есть ли отдых после этой даты (хотя бы 1 день)
-            next_day = shift_date + timedelta(days=1)
-            # Если следующий день не входит в рабочие дни (т.е. выходной)
-            if next_day not in work_dates:
-                can_use_night = True
-        
-        # Ночную смену ставим только если:
-        # 1. Это не первая смена (чтобы был отдых перед ней)
-        # 2. После неё есть гарантированный отдых
-        # 3. Ставим не чаще 1 раза в месяц (например, в середине)
-        use_night = False
-        if can_use_night and i > 0 and i == len(work_dates) // 2:  # примерно в середине месяца
-            use_night = True
-        
-        if use_night:
-            template = night_template
+    # Определяем тип первой пары (A или B) на основе hash сотрудника
+    use_a_first = (abs(hash(employee.id)) % 2) == 0
+    # Определяем, в какой паре (по счёту) поставить ночную смену (если есть)
+    night_pair_index = len(pairs) // 2  # середина месяца
+    # Убедимся, что ночная смена не будет в последней паре (чтобы после неё был выходной)
+    if night_pair_index >= len(pairs) - 1:
+        night_pair_index = len(pairs) - 2 if len(pairs) >= 2 else -1
+    
+    # Проходим по всем парам
+    for idx, pair in enumerate(pairs):
+        # Определяем тип пары
+        if night is not None and idx == night_pair_index and len(pair) == 2:
+            # Ночная пара: (ДЕНЬ, НОЧЬ)
+            template_first = day
+            template_second = night
         else:
-            template = day_templates[template_index % len(day_templates)]
-            template_index += 1
+            # Обычные пары: чередуем A и B
+            if (use_a_first and idx % 2 == 0) or (not use_a_first and idx % 2 == 1):
+                # Тип A: (УТРО, ДЕНЬ)
+                template_first = morning
+                template_second = day
+            else:
+                # Тип B: (ДЕНЬ, ВЕЧЕР)
+                template_first = day
+                template_second = evening
         
-        current_start = datetime.combine(shift_date, template.planned_start)
-        
-        # Если смена ночная (заканчивается на следующий день)
-        if template.planned_end >= template.planned_start:
-            current_end = datetime.combine(shift_date, template.planned_end)
+        # Первый день пары
+        shift_date = pair[0]
+        current_start = datetime.combine(shift_date, template_first.planned_start)
+        if template_first.planned_end >= template_first.planned_start:
+            current_end = datetime.combine(shift_date, template_first.planned_end)
         else:
-            current_end = datetime.combine(shift_date + timedelta(days=1), template.planned_end)
-        
+            current_end = datetime.combine(shift_date + timedelta(days=1), template_first.planned_end)
         shifts.append({
             "shift_date": shift_date,
             "planned_start": current_start,
             "planned_end": current_end,
-            "shift_template_id": template.id,
+            "shift_template_id": template_first.id,
             "status": "scheduled"
         })
+        
+        # Второй день пары (если есть)
+        if len(pair) > 1:
+            shift_date2 = pair[1]
+            current_start2 = datetime.combine(shift_date2, template_second.planned_start)
+            if template_second.planned_end >= template_second.planned_start:
+                current_end2 = datetime.combine(shift_date2, template_second.planned_end)
+            else:
+                current_end2 = datetime.combine(shift_date2 + timedelta(days=1), template_second.planned_end)
+            shifts.append({
+                "shift_date": shift_date2,
+                "planned_start": current_start2,
+                "planned_end": current_end2,
+                "shift_template_id": template_second.id,
+                "status": "scheduled"
+            })
     
     return shifts
 
