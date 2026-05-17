@@ -1,14 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, text
+from sqlalchemy import text
 from datetime import date, datetime, timedelta
-from typing import Optional, List
+from typing import Optional
 from uuid import UUID
 
 from app.core.database import get_db
-from app.models.shift import ShiftAssignment
-from app.models.employee import EmployeeView
-from app.models.shift_template import ShiftTemplate
 
 router = APIRouter(prefix="/web/reports", tags=["Web - Reports"])
 
@@ -20,105 +17,103 @@ def get_attendance_summary(
     location_id: Optional[UUID] = None,
     db: Session = Depends(get_db),
 ):
-    """Реальная сводка по посещаемости за период"""
+    """Сводка по посещаемости за период (raw SQL)"""
     
-    # Базовый запрос сотрудников через employees_view (уже содержит location через связь)
-    emp_query = db.query(EmployeeView).filter(EmployeeView.status == 'active')
-    
-    # Если указан location_id, фильтруем через workstation → location
+    # Фильтр по локации
+    location_filter = ""
+    location_param = {}
     if location_id:
-        emp_query = emp_query.filter(EmployeeView.workstation_id.has(location_id=location_id))
+        location_filter = "AND l.id = :location_id"
+        location_param = {"location_id": location_id}
     
-    employees = emp_query.all()
-    total_employees = len(employees)
+    # Общая статистика
+    stats_query = text(f"""
+        SELECT 
+            COUNT(DISTINCT e.id) as total_employees,
+            COALESCE(SUM(
+                CASE WHEN s.status = 'completed' THEN 
+                    EXTRACT(EPOCH FROM (s.planned_end - s.planned_start))/3600 
+                ELSE 0 END
+            ), 0) as total_hours,
+            COUNT(CASE WHEN s.status = 'missed' THEN 1 END) as total_missed,
+            COUNT(CASE WHEN s.status = 'sick_leave' THEN 1 END) as total_sick,
+            COUNT(CASE WHEN s.status = 'vacation' THEN 1 END) as total_vacation,
+            COUNT(CASE WHEN EXTRACT(HOUR FROM s.planned_start) BETWEEN 6 AND 17 THEN 1 END) as day_shifts,
+            COUNT(CASE WHEN EXTRACT(HOUR FROM s.planned_start) >= 18 OR EXTRACT(HOUR FROM s.planned_start) < 6 THEN 1 END) as night_shifts
+        FROM shift_assignments s
+        JOIN employees_view e ON s.employee_id = e.id
+        LEFT JOIN workstations_view w ON e.workstation_id = w.id
+        LEFT JOIN locations_view l ON w.location_id = l.id
+        WHERE s.shift_date >= :start_date 
+        AND s.shift_date <= :end_date
+        {location_filter}
+    """)
     
-    # Запрос смен за период
-    shift_query = db.query(ShiftAssignment).filter(
-        ShiftAssignment.shift_date >= start_date,
-        ShiftAssignment.shift_date <= end_date
-    )
+    params = {"start_date": start_date, "end_date": end_date, **location_param}
+    result = db.execute(stats_query, params).fetchone()
     
-    all_shifts = shift_query.all()
+    # Ежедневные данные
+    daily_query = text(f"""
+        SELECT 
+            s.shift_date,
+            COALESCE(SUM(EXTRACT(EPOCH FROM (s.planned_end - s.planned_start))/3600), 0) as hours,
+            COUNT(*) as shifts_count
+        FROM shift_assignments s
+        JOIN employees_view e ON s.employee_id = e.id
+        LEFT JOIN workstations_view w ON e.workstation_id = w.id
+        LEFT JOIN locations_view l ON w.location_id = l.id
+        WHERE s.shift_date >= :start_date 
+        AND s.shift_date <= :end_date
+        AND s.status = 'completed'
+        {location_filter}
+        GROUP BY s.shift_date
+        ORDER BY s.shift_date
+    """)
     
-    # Статистика по сменам
-    total_hours = 0
-    total_missed = 0
-    total_sick_leave = 0
-    total_vacation = 0
-    
-    day_shifts = 0
-    night_shifts = 0
+    daily = db.execute(daily_query, params).fetchall()
     
     daily_data = []
-    current = start_date
-    while current <= end_date:
-        day_shifts_list = [s for s in all_shifts if s.shift_date == current]
-        day_hours = 0
-        for s in day_shifts_list:
-            if s.status == 'completed':
-                hours = (s.planned_end - s.planned_start).total_seconds() / 3600
-                if hours < 0:
-                    hours += 24
-                day_hours += hours
-                total_hours += hours
-            elif s.status == 'missed':
-                total_missed += 1
-            elif s.status == 'sick_leave':
-                total_sick_leave += 1
-            elif s.status == 'vacation':
-                total_vacation += 1
-            
-            # Подсчёт дневных/ночных смен
-            start_hour = s.planned_start.hour
-            if 6 <= start_hour <= 17:
-                day_shifts += 1
-            else:
-                night_shifts += 1
-        
+    for d in daily:
         daily_data.append({
-            "date": current.isoformat(),
-            "hours": round(day_hours, 1),
-            "shifts_count": len(day_shifts_list)
+            "date": d[0].isoformat(),
+            "hours": round(d[1] or 0, 1),
+            "shifts_count": d[2]
         })
-        current += timedelta(days=1)
     
-    # Почасовая разбивка по дням недели
-    weekday_hours = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
-    for shift in all_shifts:
-        if shift.status == 'completed':
-            hours = (shift.planned_end - shift.planned_start).total_seconds() / 3600
-            if hours < 0:
-                hours += 24
-            weekday_hours[shift.shift_date.weekday()] += hours
+    # По дням недели
+    weekday_query = text(f"""
+        SELECT 
+            EXTRACT(DOW FROM s.shift_date) as dow,
+            COALESCE(SUM(EXTRACT(EPOCH FROM (s.planned_end - s.planned_start))/3600), 0) as hours
+        FROM shift_assignments s
+        JOIN employees_view e ON s.employee_id = e.id
+        LEFT JOIN workstations_view w ON e.workstation_id = w.id
+        LEFT JOIN locations_view l ON w.location_id = l.id
+        WHERE s.shift_date >= :start_date 
+        AND s.shift_date <= :end_date
+        AND s.status = 'completed'
+        {location_filter}
+        GROUP BY EXTRACT(DOW FROM s.shift_date)
+        ORDER BY dow
+    """)
     
-    # Топ сотрудников по прогулам
-    missed_by_employee = {}
-    for shift in all_shifts:
-        if shift.status == 'missed':
-            missed_by_employee[shift.employee_id] = missed_by_employee.get(shift.employee_id, 0) + 1
-    
-    top_offenders = []
-    for emp_id, count in sorted(missed_by_employee.items(), key=lambda x: x[1], reverse=True)[:5]:
-        emp = db.query(EmployeeView).filter(EmployeeView.id == emp_id).first()
-        if emp:
-            top_offenders.append({
-                "name": emp.full_name,
-                "missed_count": count
-            })
+    weekday_result = db.execute(weekday_query, params).fetchall()
+    weekday_map = {int(r[0]): round(r[1] or 0, 1) for r in weekday_result}
+    weekday_labels = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
+    weekday_hours = [weekday_map.get(i, 0) for i in range(1, 8)]
     
     return {
-        "total_employees": total_employees,
-        "total_hours": round(total_hours, 1),
-        "total_shifts": len(all_shifts),
-        "total_missed": total_missed,
-        "total_sick_leave": total_sick_leave,
-        "total_vacation": total_vacation,
-        "day_shifts": day_shifts,
-        "night_shifts": night_shifts,
+        "total_employees": result[0] or 0,
+        "total_hours": round(result[1] or 0, 1),
+        "total_shifts": sum(d[2] for d in daily),
+        "total_missed": result[2] or 0,
+        "total_sick_leave": result[3] or 0,
+        "total_vacation": result[4] or 0,
+        "day_shifts": result[5] or 0,
+        "night_shifts": result[6] or 0,
         "daily_data": daily_data,
-        "weekday_hours": [weekday_hours[i] for i in range(7)],
-        "weekday_labels": ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"],
-        "top_offenders": top_offenders,
+        "weekday_hours": weekday_hours,
+        "weekday_labels": weekday_labels,
         "period": {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
@@ -134,7 +129,7 @@ def get_leave_summary(
     leave_type: Optional[str] = Query("all"),
     db: Session = Depends(get_db),
 ):
-    """Реальные данные об отпусках и больничных"""
+    """Отпуска и больничные за месяц (raw SQL)"""
     
     start_date = date(year, month, 1)
     if month == 12:
@@ -142,51 +137,63 @@ def get_leave_summary(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Запрос смен со статусами отпуска/больничного
-    status_filter = ['vacation', 'sick_leave']
-    shifts = db.query(ShiftAssignment).filter(
-        ShiftAssignment.shift_date >= start_date,
-        ShiftAssignment.shift_date <= end_date,
-        ShiftAssignment.status.in_(status_filter)
-    ).all()
+    query = text("""
+        SELECT 
+            e.full_name,
+            s.status,
+            s.shift_date
+        FROM shift_assignments s
+        JOIN employees_view e ON s.employee_id = e.id
+        WHERE s.shift_date >= :start_date 
+        AND s.shift_date <= :end_date
+        AND s.status IN ('vacation', 'sick_leave')
+        ORDER BY e.full_name, s.shift_date
+    """)
+    
+    rows = db.execute(query, {"start_date": start_date, "end_date": end_date}).fetchall()
     
     # Группировка по сотрудникам
-    employees_on_leave = {}
-    for shift in shifts:
-        emp_id = str(shift.employee_id)
-        if emp_id not in employees_on_leave:
-            emp = db.query(EmployeeView).filter(EmployeeView.id == shift.employee_id).first()
-            employees_on_leave[emp_id] = {
-                "name": emp.full_name if emp else "Неизвестно",
-                "type": shift.status,
-                "start_date": shift.shift_date,
-                "end_date": shift.shift_date,
+    leaves_by_employee = {}
+    for row in rows:
+        name = row[0]
+        status = row[1]
+        shift_date = row[2]
+        
+        if name not in leaves_by_employee:
+            leaves_by_employee[name] = {
+                "type": status,
+                "start_date": shift_date,
+                "end_date": shift_date,
                 "days": 1
             }
         else:
-            if shift.shift_date < employees_on_leave[emp_id]["start_date"]:
-                employees_on_leave[emp_id]["start_date"] = shift.shift_date
-            if shift.shift_date > employees_on_leave[emp_id]["end_date"]:
-                employees_on_leave[emp_id]["end_date"] = shift.shift_date
-            employees_on_leave[emp_id]["days"] += 1
+            if shift_date < leaves_by_employee[name]["start_date"]:
+                leaves_by_employee[name]["start_date"] = shift_date
+            if shift_date > leaves_by_employee[name]["end_date"]:
+                leaves_by_employee[name]["end_date"] = shift_date
+            leaves_by_employee[name]["days"] += 1
     
-    leaves_list = list(employees_on_leave.values())
-    
-    # Фильтрация по типу
-    if leave_type != "all":
-        leaves_list = [l for l in leaves_list if l["type"] == leave_type]
+    leaves_list = []
+    for name, data in leaves_by_employee.items():
+        if leave_type == "all" or data["type"] == leave_type:
+            leaves_list.append({
+                "name": name,
+                "type": data["type"],
+                "start_date": data["start_date"].isoformat(),
+                "end_date": data["end_date"].isoformat(),
+                "days": data["days"]
+            })
     
     # Календарь
     days_in_month = (end_date - start_date).days + 1
     calendar = []
     for day in range(1, days_in_month + 1):
         current_date = date(year, month, day)
-        day_leaves = [l for l in leaves_list if l["start_date"] <= current_date <= l["end_date"]]
+        day_leaves = [l for l in leaves_list if current_date >= date.fromisoformat(l["start_date"]) and current_date <= date.fromisoformat(l["end_date"])]
         calendar.append({
             "day": day,
             "has_leave": len(day_leaves) > 0,
-            "leave_count": len(day_leaves),
-            "types": list(set([l["type"] for l in day_leaves]))
+            "leave_count": len(day_leaves)
         })
     
     return {
