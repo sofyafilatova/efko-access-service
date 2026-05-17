@@ -629,7 +629,7 @@ def remind_about_shift(
 
 
 # =====================================================
-# АВТОМАТИЧЕСКОЕ НАЗНАЧЕНИЕ СМЕН
+# АВТОМАТИЧЕСКОЕ НАЗНАЧЕНИЕ СМЕН (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 # =====================================================
 
 class AutoAssignRequest(BaseModel):
@@ -645,20 +645,16 @@ def auto_assign_shifts(
 ):
     """Автоматическое назначение смен на месяц для всех активных сотрудников"""
     
-    # Получаем все шаблоны смен
     templates = db.query(ShiftTemplate).filter(ShiftTemplate.is_active == True).all()
     office_templates = [t for t in templates if t.code.startswith('OFFICE')]
     factory_templates = [t for t in templates if t.code.startswith('FACTORY')]
     
-    # Получаем всех активных сотрудников
     employees = db.query(EmployeeView).filter(EmployeeView.status == 'active').all()
     
-    # Определяем тип сотрудника (офис/завод) через SQL запрос
     office_employees = []
     factory_employees = []
     
     for emp in employees:
-        # Определяем по location через workstation
         is_office = False
         if emp.workstation_id:
             query = text("""
@@ -676,16 +672,14 @@ def auto_assign_shifts(
         else:
             factory_employees.append(emp)
     
-    # Генерация смен для офисных сотрудников (5/2, пн-пт)
     office_shifts_created = 0
     for emp in office_employees:
-        shifts = generate_office_shifts(emp, data.year, data.month, office_templates, db)
+        shifts = generate_office_shifts(emp, data.year, data.month, office_templates)
         office_shifts_created += save_shifts(emp.id, shifts, data.override_existing, db)
     
-    # Генерация смен для заводских сотрудников (2/2, ротация)
     factory_shifts_created = 0
     for emp in factory_employees:
-        shifts = generate_factory_shifts(emp, data.year, data.month, factory_templates, db)
+        shifts = generate_factory_shifts_fixed(emp, data.year, data.month, factory_templates)
         factory_shifts_created += save_shifts(emp.id, shifts, data.override_existing, db)
     
     return {
@@ -698,8 +692,8 @@ def auto_assign_shifts(
     }
 
 
-def generate_office_shifts(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate], db: Session) -> List[dict]:
-    """Генерирует смены для офисного сотрудника (5/2, пн-пт)"""
+def generate_office_shifts(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate]) -> List[dict]:
+    """Офисные сотрудники: 5/2, только рабочие дни (пн-пт), одна смена в день"""
     
     shifts = []
     start_date = date(year, month, 1)
@@ -714,7 +708,8 @@ def generate_office_shifts(employee: EmployeeView, year: int, month: int, templa
     
     current_date = start_date
     while current_date < end_date:
-        if current_date.weekday() < 5:  # пн-пт
+        # Только будние дни (пн=0 ... пт=4)
+        if current_date.weekday() < 5:
             shifts.append({
                 "shift_date": current_date,
                 "planned_start": datetime.combine(current_date, office_template.planned_start),
@@ -727,8 +722,11 @@ def generate_office_shifts(employee: EmployeeView, year: int, month: int, templa
     return shifts
 
 
-def generate_factory_shifts(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate], db: Session) -> List[dict]:
-    """Генерирует смены для заводского сотрудника (2/2, ротация)"""
+def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate]) -> List[dict]:
+    """
+    Заводские сотрудники: график 2/2 (2 дня работы, 2 дня отдыха)
+    Смены чередуются по кругу: MORNING → DAY → EVENING → NIGHT → MORNING...
+    """
     
     shifts = []
     start_date = date(year, month, 1)
@@ -737,9 +735,10 @@ def generate_factory_shifts(employee: EmployeeView, year: int, month: int, templ
     else:
         end_date = date(year, month + 1, 1)
     
-    factory_template_codes = ['FACTORY-MORNING', 'FACTORY-DAY', 'FACTORY-EVENING', 'FACTORY-NIGHT']
+    # Шаблоны смен в правильном порядке
+    template_order = ['FACTORY-MORNING', 'FACTORY-DAY', 'FACTORY-EVENING', 'FACTORY-NIGHT']
     factory_templates = []
-    for code in factory_template_codes:
+    for code in template_order:
         t = next((t for t in templates if t.code == code), None)
         if t:
             factory_templates.append(t)
@@ -747,23 +746,21 @@ def generate_factory_shifts(employee: EmployeeView, year: int, month: int, templ
     if not factory_templates:
         return shifts
     
-    # Используем hash от employee_id для равномерного распределения
-    rotation_start = abs(hash(employee.id)) % len(factory_templates)
+    # Определяем стартовую позицию в ротации на основе ID сотрудника
+    start_index = abs(hash(employee.id)) % len(factory_templates)
     
     current_date = start_date
-    day_counter = 0
-    shift_cycle = 0
+    day_in_cycle = 0  # 0,1 - работа, 2,3 - отдых
+    template_index = start_index
     
     while current_date < end_date:
-        is_work_day = (day_counter % 4) < 2  # 2 дня работы, 2 дня отдыха
-        
-        if is_work_day:
-            template_index = (rotation_start + shift_cycle) % len(factory_templates)
-            template = factory_templates[template_index]
+        # Дни работы: 0 и 1 в цикле
+        if day_in_cycle < 2:
+            template = factory_templates[template_index % len(factory_templates)]
             
             current_start = datetime.combine(current_date, template.planned_start)
             
-            # Проверка на ночную смену (переход через полночь)
+            # Если смена ночная (заканчивается на следующий день)
             if template.planned_end >= template.planned_start:
                 current_end = datetime.combine(current_date, template.planned_end)
             else:
@@ -776,10 +773,12 @@ def generate_factory_shifts(employee: EmployeeView, year: int, month: int, templ
                 "shift_template_id": template.id,
                 "status": "scheduled"
             })
-            shift_cycle = (shift_cycle + 1) % len(factory_templates)
+            
+            # После каждого рабочего дня меняем тип смены
+            template_index += 1
         
         current_date += timedelta(days=1)
-        day_counter += 1
+        day_in_cycle = (day_in_cycle + 1) % 4
     
     return shifts
 
@@ -837,19 +836,13 @@ def validate_tk_rf(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Берём смены за месяц + по 2 дня до и после для расчёта переходов
-    prev_start = start_date - timedelta(days=2)
-    next_end = end_date + timedelta(days=2)
-    
-    all_shifts = db.query(ShiftAssignment).filter(
+    # Получаем смены за месяц
+    month_shifts = db.query(ShiftAssignment).filter(
         ShiftAssignment.employee_id == employee_id,
-        ShiftAssignment.shift_date >= prev_start,
-        ShiftAssignment.shift_date <= next_end,
+        ShiftAssignment.shift_date >= start_date,
+        ShiftAssignment.shift_date <= end_date,
         ShiftAssignment.status.in_(['scheduled', 'in_progress', 'completed'])
     ).order_by(ShiftAssignment.shift_date, ShiftAssignment.planned_start).all()
-    
-    # Смены за месяц
-    month_shifts = [s for s in all_shifts if start_date <= s.shift_date <= end_date]
     
     if not month_shifts:
         return {
@@ -862,27 +855,22 @@ def validate_tk_rf(
         }
     
     # =========================================================
-    # 1. Межсменный отдых (только для смен в разные дни)
+    # 1. Межсменный отдых
     # =========================================================
-    rest_hours_list = []
+    min_rest = 999
+    for i in range(1, len(month_shifts)):
+        prev_end = month_shifts[i-1].planned_end
+        curr_start = month_shifts[i].planned_start
+        rest_hours = (curr_start - prev_end).total_seconds() / 3600
+        if rest_hours < min_rest:
+            min_rest = rest_hours
     
-    for i in range(1, len(all_shifts)):
-        prev_shift = all_shifts[i-1]
-        curr_shift = all_shifts[i]
-        
-        # Если смены в один день — пропускаем (это одна и та же смена? такого не должно быть)
-        if prev_shift.shift_date == curr_shift.shift_date:
-            continue
-        
-        rest_hours = (curr_shift.planned_start - prev_shift.planned_end).total_seconds() / 3600
-        rest_hours_list.append(rest_hours)
-    
-    if rest_hours_list:
-        min_rest_hours = round(min(rest_hours_list), 1)
-        rest_ok = min_rest_hours >= 12
+    if min_rest == 999:
+        min_rest = None
+        rest_ok = True
     else:
-        min_rest_hours = None
-        rest_ok = True  # Нет пар смен для проверки
+        min_rest = round(min_rest, 1)
+        rest_ok = min_rest >= 12
     
     # =========================================================
     # 2. Недельная нагрузка
@@ -895,33 +883,32 @@ def validate_tk_rf(
         hours = (shift.planned_end - shift.planned_start).total_seconds() / 3600
         weekly_hours[key] = weekly_hours.get(key, 0) + hours
     
-    max_weekly_hours = max(weekly_hours.values()) if weekly_hours else 0
-    weekly_hours_ok = max_weekly_hours <= 40
+    max_weekly = max(weekly_hours.values()) if weekly_hours else 0
+    weekly_hours_ok = max_weekly <= 40
     
     # =========================================================
-    # 3. Еженедельный отдых (между последней сменой недели и первой следующей)
+    # 3. Еженедельный отдых
     # =========================================================
-    # Группируем смены по неделям
-    week_shifts_map = {}
+    weeks = {}
     for shift in month_shifts:
         week_num = shift.shift_date.isocalendar()[1]
-        year_num = shift.shift_date.year
-        key = f"{year_num}-{week_num}"
-        if key not in week_shifts_map:
-            week_shifts_map[key] = []
-        week_shifts_map[key].append(shift)
+        week_year = shift.shift_date.year
+        key = f"{week_year}-{week_num}"
+        if key not in weeks:
+            weeks[key] = []
+        weeks[key].append(shift)
+    
+    sorted_weeks = sorted(weeks.keys())
     
     weekly_rest_values = []
-    week_keys = sorted(week_shifts_map.keys())
-    
-    for i in range(len(week_keys) - 1):
-        current_week_key = week_keys[i]
-        next_week_key = week_keys[i + 1]
+    for i in range(len(sorted_weeks) - 1):
+        current_week = sorted_weeks[i]
+        next_week = sorted_weeks[i + 1]
         
-        last_shift_current = max(week_shifts_map[current_week_key], key=lambda x: x.shift_date)
-        first_shift_next = min(week_shifts_map[next_week_key], key=lambda x: x.shift_date)
+        last_shift = max(weeks[current_week], key=lambda x: x.planned_end)
+        first_shift = min(weeks[next_week], key=lambda x: x.planned_start)
         
-        rest_hours = (first_shift_next.planned_start - last_shift_current.planned_end).total_seconds() / 3600
+        rest_hours = (first_shift.planned_start - last_shift.planned_end).total_seconds() / 3600
         weekly_rest_values.append(round(rest_hours, 1))
     
     if weekly_rest_values:
@@ -929,96 +916,86 @@ def validate_tk_rf(
         weekly_rest_ok = min_weekly_rest >= 42
     else:
         min_weekly_rest = None
-        weekly_rest_ok = True  # Нет переходов между неделями
+        weekly_rest_ok = True
     
     # =========================================================
     # 4. Сверхурочные
     # =========================================================
     overtime_total = 0
-    for week_hours in weekly_hours.values():
-        if week_hours > 40:
-            overtime_total += week_hours - 40
-    
+    for hours in weekly_hours.values():
+        if hours > 40:
+            overtime_total += hours - 40
     overtime_ok = overtime_total <= 120
     
     # =========================================================
     # 5. Ночные смены
     # =========================================================
-    night_shifts_count = 0
+    night_shifts = 0
     for shift in month_shifts:
         start_hour = shift.planned_start.hour
-        end_hour = shift.planned_end.hour
-        # Ночная смена: начинается после 22:00 ИЛИ заканчивается до 06:00 (и не равна 00:00)
-        if start_hour >= 22 or (end_hour <= 6 and end_hour > 0) or (start_hour < 6 and end_hour <= 6):
-            night_shifts_count += 1
+        if start_hour >= 22 or start_hour < 6:
+            night_shifts += 1
     
     # =========================================================
     # 6. Норма за месяц
     # =========================================================
-    work_days_in_month = 0
-    current_date = start_date
-    while current_date <= end_date:
-        if current_date.weekday() < 5:  # пн-пт
-            work_days_in_month += 1
-        current_date += timedelta(days=1)
+    work_days = 0
+    current = start_date
+    while current <= end_date:
+        if current.weekday() < 5:
+            work_days += 1
+        current += timedelta(days=1)
     
-    month_norm = work_days_in_month * 8
-    total_hours_month = sum((s.planned_end - s.planned_start).total_seconds() / 3600 for s in month_shifts)
-    month_hours_ok = total_hours_month <= month_norm
+    month_norm = work_days * 8
+    total_hours = sum((s.planned_end - s.planned_start).total_seconds() / 3600 for s in month_shifts)
+    month_ok = total_hours <= month_norm
     
-    # =========================================================
-    # 7. Ответ
-    # =========================================================
+    overall_ok = rest_ok and weekly_hours_ok and weekly_rest_ok and overtime_ok and month_ok
+    
     return {
         "employee_id": str(employee_id),
         "employee_name": employee.full_name,
         "period": {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "month": month,
-            "year": year,
-            "work_days": work_days_in_month,
-            "norm_hours": month_norm
         },
         "checks": {
             "rest_between_shifts": {
-                "value": min_rest_hours,
+                "value": min_rest,
                 "required": "≥ 12 часов",
                 "is_ok": rest_ok,
-                "message": f"Минимальный отдых между сменами: {min_rest_hours} ч." if min_rest_hours else "Нет пар смен для проверки"
+                "message": f"Межсменный отдых: {min_rest} ч" if min_rest else "Нет данных"
             },
             "weekly_rest": {
                 "value": min_weekly_rest,
                 "required": "≥ 42 часов",
                 "is_ok": weekly_rest_ok,
-                "message": f"Минимальный отдых между неделями: {min_weekly_rest} ч." if min_weekly_rest else "Нет переходов между неделями"
+                "message": f"Еженедельный отдых: {min_weekly_rest} ч" if min_weekly_rest else "Нет данных"
             },
             "weekly_hours": {
-                "value": round(max_weekly_hours, 1),
+                "value": round(max_weekly, 1),
                 "required": "≤ 40 часов",
                 "is_ok": weekly_hours_ok,
-                "message": f"Максимальная недельная нагрузка: {round(max_weekly_hours, 1)} ч."
+                "message": f"Макс. часов в неделю: {round(max_weekly, 1)}"
             },
             "overtime": {
                 "value": round(overtime_total, 1),
                 "required": "≤ 120 часов/год",
                 "is_ok": overtime_ok,
-                "message": f"Сверхурочные за месяц: {round(overtime_total, 1)} ч."
+                "message": f"Сверхурочные: {round(overtime_total, 1)}"
             },
             "night_shifts": {
-                "value": night_shifts_count,
+                "value": night_shifts,
                 "required": "",
                 "is_ok": True,
-                "message": f"Ночных смен за месяц: {night_shifts_count}"
+                "message": f"Ночных смен: {night_shifts}"
             },
             "month_hours": {
-                "value": round(total_hours_month, 1),
+                "value": round(total_hours, 1),
                 "required": f"≤ {month_norm} часов",
-                "is_ok": month_hours_ok,
-                "message": f"Отработано: {round(total_hours_month, 1)} / {month_norm} ч."
+                "is_ok": month_ok,
+                "message": f"Отработано: {round(total_hours, 1)} / {month_norm} ч"
             }
         },
-        "overall_ok": rest_ok and weekly_hours_ok and weekly_rest_ok and overtime_ok and month_hours_ok,
-        "total_shifts": len(month_shifts),
-        "total_hours": round(total_hours_month, 1)
+        "overall_ok": overall_ok
     }
