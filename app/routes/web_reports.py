@@ -205,13 +205,14 @@ def get_leave_summary(
         "calendar": calendar
     }
 
+
 @router.get("/shift-analytics")
 def get_shift_analytics(
     year: int = Query(...),
     month: int = Query(...),
     db: Session = Depends(get_db),
 ):
-    """Аналитика смен за месяц"""
+    """Аналитика смен за месяц с правильным расчётом сверхурочных (по сотрудникам и неделям)"""
     
     start_date = date(year, month, 1)
     if month == 12:
@@ -219,16 +220,17 @@ def get_shift_analytics(
     else:
         end_date = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Получаем все смены за месяц
+    # Получаем все ЗАВЕРШЁННЫЕ смены за месяц с employee_id
     query = text("""
         SELECT 
-            s.status,
+            s.employee_id,
             EXTRACT(HOUR FROM s.planned_start) as start_hour,
             EXTRACT(EPOCH FROM (s.planned_end - s.planned_start))/3600 as hours,
             s.shift_date
         FROM shift_assignments s
         WHERE s.shift_date >= :start_date 
         AND s.shift_date <= :end_date
+        AND s.status = 'completed'
     """)
     
     rows = db.execute(query, {"start_date": start_date, "end_date": end_date}).fetchall()
@@ -236,13 +238,14 @@ def get_shift_analytics(
     day_shifts = 0
     night_shifts = 0
     total_hours = 0
+    total_shifts = len(rows)
     shift_types = {"morning": 0, "day": 0, "evening": 0, "night": 0}
     
-    # Группируем по неделям для расчёта сверхурочных
-    weekly_hours = {}
+    # Группируем часы по сотрудникам и неделям для расчёта сверхурочных
+    employee_weekly_hours = {}  # {employee_id: {week_key: hours}}
     
     for row in rows:
-        status = row[0]
+        employee_id = row[0]
         start_hour = row[1] or 0
         hours = row[2] or 0
         shift_date = row[3]
@@ -250,40 +253,44 @@ def get_shift_analytics(
         if hours < 0:
             hours += 24
         
-        if status == 'completed':
-            total_hours += hours
-            
-            # Типы смен по времени начала
-            if 6 <= start_hour < 10:
-                shift_types["morning"] += 1
-            elif 10 <= start_hour < 14:
-                shift_types["day"] += 1
-            elif 14 <= start_hour < 22:
-                shift_types["evening"] += 1
-            else:
-                shift_types["night"] += 1
-            
-            # Дневные/ночные смены
-            if 6 <= start_hour <= 17:
-                day_shifts += 1
-            else:
-                night_shifts += 1
-            
-            # Для сверхурочных: группируем по неделям
-            week_num = shift_date.isocalendar()[1]
-            week_key = f"{shift_date.year}-{week_num}"
-            weekly_hours[week_key] = weekly_hours.get(week_key, 0) + hours
+        total_hours += hours
+        
+        # Типы смен по времени начала
+        if 6 <= start_hour < 10:
+            shift_types["morning"] += 1
+        elif 10 <= start_hour < 14:
+            shift_types["day"] += 1
+        elif 14 <= start_hour < 22:
+            shift_types["evening"] += 1
+        else:
+            shift_types["night"] += 1
+        
+        # Дневные/ночные смены
+        if 6 <= start_hour <= 17:
+            day_shifts += 1
+        else:
+            night_shifts += 1
+        
+        # Для сверхурочных: группируем по сотрудникам и неделям
+        week_num = shift_date.isocalendar()[1]
+        week_key = f"{shift_date.year}-{week_num}"
+        
+        if employee_id not in employee_weekly_hours:
+            employee_weekly_hours[employee_id] = {}
+        
+        employee_weekly_hours[employee_id][week_key] = employee_weekly_hours[employee_id].get(week_key, 0) + hours
     
-    # Расчёт сверхурочных (часы свыше 40 в неделю)
+    # Расчёт сверхурочных: суммируем часы сверх 40 за каждую неделю для каждого сотрудника
     overtime = 0
-    for week_hours in weekly_hours.values():
-        if week_hours > 40:
-            overtime += week_hours - 40
+    for employee_id, weeks in employee_weekly_hours.items():
+        for week_key, week_hours in weeks.items():
+            if week_hours > 40:
+                overtime += week_hours - 40
     
     return {
         "day_shifts": day_shifts,
         "night_shifts": night_shifts,
-        "total_shifts": len(rows),
+        "total_shifts": total_shifts,
         "total_hours": round(total_hours, 1),
         "overtime": round(overtime, 1),
         "shift_types": shift_types
