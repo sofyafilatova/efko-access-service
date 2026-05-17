@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, text
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 from uuid import UUID
@@ -8,7 +8,7 @@ from uuid import UUID
 from app.core.database import get_db
 from app.models.shift import ShiftAssignment
 from app.models.employee import EmployeeView
-from app.models.location import LocationView
+from app.models.shift_template import ShiftTemplate
 
 router = APIRouter(prefix="/web/reports", tags=["Web - Reports"])
 
@@ -22,10 +22,13 @@ def get_attendance_summary(
 ):
     """Реальная сводка по посещаемости за период"""
     
-    # Базовый запрос сотрудников
+    # Базовый запрос сотрудников через employees_view (уже содержит location через связь)
     emp_query = db.query(EmployeeView).filter(EmployeeView.status == 'active')
+    
+    # Если указан location_id, фильтруем через workstation → location
     if location_id:
-        emp_query = emp_query.filter(EmployeeView.location_id == location_id)
+        emp_query = emp_query.filter(EmployeeView.workstation_id.has(location_id=location_id))
+    
     employees = emp_query.all()
     total_employees = len(employees)
     
