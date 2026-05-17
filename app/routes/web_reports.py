@@ -152,37 +152,56 @@ def get_leave_summary(
     
     rows = db.execute(query, {"start_date": start_date, "end_date": end_date}).fetchall()
     
-    # Группировка по сотрудникам
-    leaves_by_employee = {}
+    # Группировка по сотрудникам с объединением последовательных дней
+    leaves_list = []
+    current_employee = None
+    current_start = None
+    current_end = None
+    current_status = None
+    current_days = 0
+    
     for row in rows:
         name = row[0]
         status = row[1]
         shift_date = row[2]
         
-        if name not in leaves_by_employee:
-            leaves_by_employee[name] = {
-                "type": status,
-                "start_date": shift_date,
-                "end_date": shift_date,
-                "days": 1
-            }
+        if current_employee is None:
+            # Начало нового сотрудника
+            current_employee = name
+            current_status = status
+            current_start = shift_date
+            current_end = shift_date
+            current_days = 1
+        elif current_employee == name and current_status == status and (shift_date - current_end).days <= 1:
+            # Продолжение того же периода (последовательные дни)
+            current_end = shift_date
+            current_days += 1
         else:
-            if shift_date < leaves_by_employee[name]["start_date"]:
-                leaves_by_employee[name]["start_date"] = shift_date
-            if shift_date > leaves_by_employee[name]["end_date"]:
-                leaves_by_employee[name]["end_date"] = shift_date
-            leaves_by_employee[name]["days"] += 1
+            # Сохраняем предыдущий период
+            if leave_type == "all" or current_status == leave_type:
+                leaves_list.append({
+                    "name": current_employee,
+                    "type": current_status,
+                    "start_date": current_start.isoformat(),
+                    "end_date": current_end.isoformat(),
+                    "days": current_days
+                })
+            # Начинаем новый период
+            current_employee = name
+            current_status = status
+            current_start = shift_date
+            current_end = shift_date
+            current_days = 1
     
-    leaves_list = []
-    for name, data in leaves_by_employee.items():
-        if leave_type == "all" or data["type"] == leave_type:
-            leaves_list.append({
-                "name": name,
-                "type": data["type"],
-                "start_date": data["start_date"].isoformat(),
-                "end_date": data["end_date"].isoformat(),
-                "days": data["days"]
-            })
+    # Сохраняем последний период
+    if current_employee is not None and (leave_type == "all" or current_status == leave_type):
+        leaves_list.append({
+            "name": current_employee,
+            "type": current_status,
+            "start_date": current_start.isoformat(),
+            "end_date": current_end.isoformat(),
+            "days": current_days
+        })
     
     # Календарь
     days_in_month = (end_date - start_date).days + 1
