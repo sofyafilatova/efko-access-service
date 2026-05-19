@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import BaseModel
+from typing import Optional
 from app.core.database import get_db
 from app.models.access import AccessRight
 from app.models.notification import Notification
@@ -11,7 +12,6 @@ from app.models.zone import Zone
 router = APIRouter(prefix="/access-rights", tags=["Access Rights"])
 
 class AccessRightCreate(BaseModel):
-    employee_id: UUID
     zone_id: UUID
     is_permitted: bool
     granted_by_user_id: UUID
@@ -41,6 +41,7 @@ def get_access_rights(
 
 @router.post("/")
 def create_or_update_access_right(
+    employee_id: UUID = Query(...),  # ← ПЕРЕМЕСТИЛИ СЮДА ИЗ ТЕЛА
     data: AccessRightCreate,
     db: Session = Depends(get_db),
 ):
@@ -51,7 +52,7 @@ def create_or_update_access_right(
     zone_name = zone.name if zone else "неизвестная зона"
     
     existing = db.query(AccessRight).filter(
-        AccessRight.employee_id == data.employee_id,
+        AccessRight.employee_id == employee_id,
         AccessRight.zone_id == data.zone_id,
     ).first()
     
@@ -65,13 +66,13 @@ def create_or_update_access_right(
         
         # Отправляем уведомление только если статус изменился
         if old_status != data.is_permitted:
-            create_notification(db, data.employee_id, data.is_permitted, zone_name, data.reason)
+            create_notification(db, employee_id, data.is_permitted, zone_name, data.reason)
         
         return {"message": "updated"}
     else:
         new_right = AccessRight(
             id=uuid4(),
-            employee_id=data.employee_id,
+            employee_id=employee_id,
             zone_id=data.zone_id,
             is_permitted=data.is_permitted,
             granted_by_user_id=data.granted_by_user_id,
@@ -83,7 +84,7 @@ def create_or_update_access_right(
         
         # Отправляем уведомление о выдаче права
         if data.is_permitted:
-            create_notification(db, data.employee_id, data.is_permitted, zone_name, data.reason)
+            create_notification(db, employee_id, data.is_permitted, zone_name, data.reason)
         
         return {"message": "created"}
 
