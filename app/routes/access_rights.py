@@ -41,8 +41,8 @@ def get_access_rights(
 
 @router.post("/")
 def create_or_update_access_right(
-    employee_id: UUID = Query(...),  # ← ПЕРЕМЕСТИЛИ СЮДА ИЗ ТЕЛА
-    data: AccessRightCreate,
+    data: AccessRightCreate,  # ← СНАЧАЛА data (без значения по умолчанию)
+    employee_id: UUID = Query(...),  # ← ПОТОМ employee_id с Query
     db: Session = Depends(get_db),
 ):
     """Выдать или отозвать доступ сотрудника к зоне"""
