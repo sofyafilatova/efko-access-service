@@ -722,7 +722,6 @@ def generate_office_shifts(employee: EmployeeView, year: int, month: int, templa
     
     return shifts
 
-
 def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int, templates: List[ShiftTemplate]) -> List[dict]:
     """
     Заводские сотрудники: график 2/2 (2 дня работы, 2 дня отдыха)
@@ -730,6 +729,9 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
       - Обычные пары: (УТРО, ДЕНЬ) или (ДЕНЬ, ВЕЧЕР)
       - Одна пара в месяц (в середине) может быть (ДЕНЬ, НОЧЬ) для ночной смены
     Гарантируется отдых не менее 12 часов между сменами.
+    
+    Важно: каждый сотрудник получает СЛУЧАЙНОЕ смещение фазы графика 2/2,
+    чтобы заводские сотрудники не работали все в одни и те же дни.
     """
     shifts = []
     start_date = date(year, month, 1)
@@ -745,18 +747,29 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     night = next((t for t in templates if t.code == 'FACTORY-NIGHT'), None)
     
     if not all([morning, day, evening]):
-        # Если нет нужных шаблонов, возвращаем пустой список
         return shifts
     
-    # Определяем рабочие дни по графику 2/2
+    # ========== НОВОЕ: случайное смещение фазы графика 2/2 ==========
+    # Используем hash от employee_id для определения фазы (0-3)
+    # Фаза 0: работа в дни 0,1 цикла (1,2, 5,6, 9,10...)
+    # Фаза 1: работа в дни 1,2 цикла (2,3, 6,7, 10,11...)
+    # Фаза 2: работа в дни 2,3 цикла (3,4, 7,8, 11,12...)
+    # Фаза 3: работа в дни 3,0 цикла (4,5, 8,9, 12,13...)
+    cycle_offset = abs(hash(employee.id)) % 4
+    
+    # Определяем рабочие дни по графику 2/2 со смещением
     work_dates = []
     current_date = start_date
-    day_in_cycle = 0  # 0,1 - работа, 2,3 - отдых
+    day_counter = 0
+    
     while current_date < end_date:
-        if day_in_cycle < 2:
+        # Определяем позицию в 4-дневном цикле со смещением
+        position = (day_counter + cycle_offset) % 4
+        # Работа: позиции 0 и 1 в цикле
+        if position < 2:
             work_dates.append(current_date)
         current_date += timedelta(days=1)
-        day_in_cycle = (day_in_cycle + 1) % 4
+        day_counter += 1
     
     if not work_dates:
         return shifts
@@ -767,8 +780,7 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     # Определяем тип первой пары (A или B) на основе hash сотрудника
     use_a_first = (abs(hash(employee.id)) % 2) == 0
     # Определяем, в какой паре (по счёту) поставить ночную смену (если есть)
-    night_pair_index = len(pairs) // 2  # середина месяца
-    # Убедимся, что ночная смена не будет в последней паре (чтобы после неё был выходной)
+    night_pair_index = len(pairs) // 2
     if night_pair_index >= len(pairs) - 1:
         night_pair_index = len(pairs) - 2 if len(pairs) >= 2 else -1
     
@@ -776,17 +788,13 @@ def generate_factory_shifts_fixed(employee: EmployeeView, year: int, month: int,
     for idx, pair in enumerate(pairs):
         # Определяем тип пары
         if night is not None and idx == night_pair_index and len(pair) == 2:
-            # Ночная пара: (ДЕНЬ, НОЧЬ)
             template_first = day
             template_second = night
         else:
-            # Обычные пары: чередуем A и B
             if (use_a_first and idx % 2 == 0) or (not use_a_first and idx % 2 == 1):
-                # Тип A: (УТРО, ДЕНЬ)
                 template_first = morning
                 template_second = day
             else:
-                # Тип B: (ДЕНЬ, ВЕЧЕР)
                 template_first = day
                 template_second = evening
         
